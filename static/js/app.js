@@ -447,6 +447,46 @@ async function loadDashboardData() {
                 txListContainer.appendChild(item);
             });
         }
+        await loadPurchasedPlans();
+    }
+}
+
+async function loadPurchasedPlans() {
+    const res = await apiCall('/api/user/investments');
+    if (res.success) {
+        const tbody = document.getElementById('purchased-plans-tbody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        
+        if (res.data.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 20px;">No purchased plans found.</td>
+                </tr>
+            `;
+        } else {
+            res.data.forEach(inv => {
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid var(--border-color)';
+                
+                let statusBadge = '';
+                if (inv.status === 'active') {
+                    statusBadge = `<span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10B981; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700;">Active</span>`;
+                } else {
+                    statusBadge = `<span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #EF4444; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700;">Expired</span>`;
+                }
+                
+                tr.innerHTML = `
+                    <td style="padding: 12px 8px; font-weight: 600; color: #fff;">${inv.plan_name}</td>
+                    <td style="padding: 12px 8px;">₹${inv.price.toFixed(2)}</td>
+                    <td style="padding: 12px 8px; color: var(--color-success);">₹${inv.daily_earning.toFixed(2)}/day</td>
+                    <td style="padding: 12px 8px; font-size: 12px; color: var(--text-muted);">${inv.activated_at}</td>
+                    <td style="padding: 12px 8px; font-size: 12px; color: var(--text-muted);">${inv.expires_at}</td>
+                    <td style="padding: 12px 8px;">${statusBadge}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
     }
 }
 
@@ -1319,6 +1359,8 @@ async function loadAdminPlans() {
                 ? `<button class="btn btn-danger btn-small" onclick="togglePlanActive(${plan.id}, false)">Deactivate</button>`
                 : `<button class="btn btn-success btn-small" style="background: #10B981; border-color: #10B981;" onclick="togglePlanActive(${plan.id}, true)">Activate</button>`;
 
+            const deleteBtn = `<button class="btn btn-danger btn-small" style="background: var(--color-danger); margin-left: 8px;" onclick="deletePlanCompletely(${plan.id}, '${plan.name}')">Delete</button>`;
+
             item.innerHTML = `
                 <div class="admin-plan-info">
                     <h4 style="display: flex; align-items: center; margin: 0; color: #fff;">${plan.name} ${badge}</h4>
@@ -1326,6 +1368,7 @@ async function loadAdminPlans() {
                 </div>
                 <div class="admin-plan-actions">
                     ${actionBtn}
+                    ${deleteBtn}
                 </div>
             `;
             listContainer.appendChild(item);
@@ -1362,6 +1405,17 @@ async function togglePlanActive(planId, activate) {
     if (!confirmAction) return;
 
     const res = await apiCall('/api/admin/plans', 'PUT', { id: planId, is_active: activate });
+    if (res.success) {
+        showToast(res.data.message, 'success');
+        loadAdminPlans();
+    }
+}
+
+async function deletePlanCompletely(planId, planName) {
+    const confirmDel = confirm(`WARNING: Are you sure you want to completely delete the plan "${planName}"?\n\nThis will permanently delete this plan and ALL user investments associated with it! This action cannot be undone.`);
+    if (!confirmDel) return;
+
+    const res = await apiCall('/api/admin/plans', 'DELETE', { id: planId });
     if (res.success) {
         showToast(res.data.message, 'success');
         loadAdminPlans();

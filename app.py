@@ -11,17 +11,29 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'growthworld-super-secret-key-1234567890'
 import sys
+# Configure persistent data directory (e.g. Render Disk at /data, or local instance/)
+if os.path.exists('/data'):
+    DATA_DIR = '/data'
+    UPLOAD_FOLDER = '/data/uploads'
+else:
+    DATA_DIR = os.path.join(app.root_path, 'instance')
+    UPLOAD_FOLDER = os.path.join(app.root_path, 'static', 'uploads')
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 if 'pytest' in sys.modules or os.environ.get('PYTEST_CURRENT_TEST'):
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
 else:
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///growthworld.db'
+    db_path = os.path.join(DATA_DIR, 'growthworld.db')
+    app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-UPLOAD_FOLDER = os.path.join(app.root_path, 'static', 'uploads')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 db = SQLAlchemy(app)
+
+@app.route('/static/uploads/<filename>')
+def serve_uploads(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 # ==========================================
 # DATABASE MODELS
@@ -377,6 +389,23 @@ def update_bank_details(current_user):
     
     db.session.commit()
     return jsonify({'message': 'Bank & UPI withdrawal details updated successfully.'})
+
+@app.route('/api/user/investments', methods=['GET'])
+@token_required
+def get_user_investments(current_user):
+    investments = UserInvestment.query.filter_by(user_id=current_user.id).order_by(UserInvestment.activated_at.desc()).all()
+    inv_list = []
+    for inv in investments:
+        inv_list.append({
+            'id': inv.id,
+            'plan_name': inv.plan.name if inv.plan else 'Unknown Plan',
+            'price': inv.price,
+            'daily_earning': inv.daily_earning,
+            'activated_at': inv.activated_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'expires_at': inv.expires_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'status': inv.status
+        })
+    return jsonify(inv_list)
 
 # ==========================================
 # INVESTMENT PLANS API
@@ -1235,16 +1264,20 @@ def admin_manage_plans(current_user):
         return jsonify({'message': f'Plan "{plan.name}" updated successfully.'})
         
     elif request.method == 'DELETE':
-        # Deactivate plan (we soft delete by setting is_active=False to preserve references in user_investments)
+        # Hard delete plan and its associated user investments
         data = request.get_json() or {}
         plan_id = data.get('id')
         plan = InvestmentPlan.query.get(plan_id)
         if not plan:
             return jsonify({'message': 'Plan not found.'}), 404
 
-        plan.is_active = False
+        # Delete all user investments associated with this plan
+        UserInvestment.query.filter_by(plan_id=plan.id).delete()
+        
+        # Delete the plan itself
+        db.session.delete(plan)
         db.session.commit()
-        return jsonify({'message': f'Plan "{plan.name}" deactivated successfully.'})
+        return jsonify({'message': f'Plan "{plan.name}" and all its associated purchased records have been completely deleted.'})
 
 @app.route('/api/admin/settings', methods=['GET', 'POST'])
 @admin_required

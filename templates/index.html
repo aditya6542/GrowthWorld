@@ -309,6 +309,31 @@
                             <button class="btn btn-outline btn-block mt-3" onclick="navigateTo('wallet', {tab: 'history'})">View All Transactions</button>
                         </div>
                     </div>
+
+                    <!-- Purchased Plans Section -->
+                    <div class="dashboard-card" style="margin-top: 24px;">
+                        <h3>My Purchased Plans</h3>
+                        <p class="text-muted text-small mb-3">Your active and past investment plans are listed here.</p>
+                        <div class="table-responsive">
+                            <table class="admin-table" style="width: 100%; border-collapse: collapse; text-align: left;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid var(--border-color);">
+                                        <th style="padding: 12px 8px;">Plan Name</th>
+                                        <th style="padding: 12px 8px;">Price</th>
+                                        <th style="padding: 12px 8px;">Daily Return</th>
+                                        <th style="padding: 12px 8px;">Purchased At</th>
+                                        <th style="padding: 12px 8px;">Expires At</th>
+                                        <th style="padding: 12px 8px;">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="purchased-plans-tbody">
+                                    <tr>
+                                        <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 20px;">No purchased plans found.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
 
 

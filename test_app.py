@@ -387,3 +387,58 @@ def test_wednesday_withdrawal_free(client):
         
     finally:
         app_module.datetime.datetime = original_datetime
+
+def test_delete_plan_and_purchased_plans(client):
+    # 1. Register user
+    res_user = client.post('/api/auth/signup', json={
+        'email': 'purchasetest@test.com', 
+        'phone': '9111111111', 
+        'password': 'password123'
+    })
+    assert res_user.status_code == 201
+    user_token = res_user.get_json()['token']
+    user_headers = {'Authorization': f'Bearer {user_token}'}
+
+    # 2. Get plans list to find the active plan ID
+    plans = client.get('/api/plans').get_json()
+    plan = [p for p in plans if p['price'] == 1500][0]
+    plan_id = plan['id']
+
+    # 3. Credit wallet and purchase the plan
+    with app.app_context():
+        user = User.query.filter_by(email='purchasetest@test.com').first()
+        user.wallet_balance = 2000.0
+        db.session.commit()
+
+    res_buy = client.post('/api/plans/purchase', headers=user_headers, json={'plan_id': plan_id})
+    assert res_buy.status_code == 200
+
+    # 4. Verify the plan is in the user's purchased plans list
+    res_invs = client.get('/api/user/investments', headers=user_headers)
+    assert res_invs.status_code == 200
+    invs = res_invs.get_json()
+    assert len(invs) == 1
+    assert invs[0]['plan_name'] == 'Starter Test Plan'
+    assert invs[0]['price'] == 1500.0
+    assert invs[0]['status'] == 'active'
+
+    # 5. Verify non-admin cannot delete the plan
+    res_del_fail = client.delete('/api/admin/plans', headers=user_headers, json={'id': plan_id})
+    assert res_del_fail.status_code in [401, 403] # Unauthorized/Forbidden
+
+    # 6. Admin deletes the plan
+    admin_headers = get_auth_headers(client, 'admin@growthworld.com', 'AdminPassword123')
+    res_del_success = client.delete('/api/admin/plans', headers=admin_headers, json={'id': plan_id})
+    assert res_del_success.status_code == 200
+    assert 'completely deleted' in res_del_success.get_json()['message']
+
+    # 7. Verify the plan is removed from db
+    with app.app_context():
+        assert InvestmentPlan.query.get(plan_id) is None
+        assert UserInvestment.query.filter_by(plan_id=plan_id).first() is None
+
+    # 8. Verify the user's investments list is now empty (hard deleted)
+    res_invs_post = client.get('/api/user/investments', headers=user_headers)
+    assert res_invs_post.status_code == 200
+    assert len(res_invs_post.get_json()) == 0
+
