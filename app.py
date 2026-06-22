@@ -10,7 +10,11 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'growthworld-super-secret-key-1234567890'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///growthworld.db'
+import sys
+if 'pytest' in sys.modules or os.environ.get('PYTEST_CURRENT_TEST'):
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+else:
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///growthworld.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 UPLOAD_FOLDER = os.path.join(app.root_path, 'static', 'uploads')
@@ -193,9 +197,8 @@ def admin_required(f):
 
 def process_lazy_payouts(user):
     """
-    Checks user's active investments. For any investment, calculates how many
-    days have passed since last_payout_at (or activation), creates transactions,
-    credits wallet, and updates last_payout_at.
+    Checks user's active investments. For any investment that has passed its
+    expiration date, updates its status to 'expired'. Payouts are claimed via tasks.
     """
     now = datetime.datetime.utcnow()
     active_investments = UserInvestment.query.filter_by(user_id=user.id, status='active').all()
@@ -206,46 +209,6 @@ def process_lazy_payouts(user):
             inv.status = 'expired'
             db.session.add(inv)
             updated = True
-            continue
-            
-        # Payout calculation based on daily cycles (24-hour periods)
-        time_since_payout = now - inv.last_payout_at
-        days_pending = int(time_since_payout.total_seconds() // 86400)
-        
-        if days_pending > 0:
-            payout_amount = inv.daily_earning * days_pending
-            
-            # Cap the payout if we would exceed the plan's expiry
-            total_duration = (inv.expires_at - inv.activated_at).days
-            days_already_paid = int((inv.last_payout_at - inv.activated_at).total_seconds() // 86400)
-            max_payout_days = total_duration - days_already_paid
-            
-            if days_pending > max_payout_days:
-                days_pending = max_payout_days
-                payout_amount = inv.daily_earning * days_pending
-            
-            if payout_amount > 0:
-                user.wallet_balance += payout_amount
-                inv.last_payout_at = inv.last_payout_at + datetime.timedelta(days=days_pending)
-                
-                # Check if it has expired now
-                if inv.last_payout_at >= inv.expires_at:
-                    inv.status = 'expired'
-                
-                # Create transactions for each payout day
-                for d in range(days_pending):
-                    tx = Transaction(
-                        user_id=user.id,
-                        amount=inv.daily_earning,
-                        type='plan_payout',
-                        status='approved',
-                        description=f"Daily return for plan: {inv.plan.name}"
-                    )
-                    db.session.add(tx)
-                
-                db.session.add(inv)
-                db.session.add(user)
-                updated = True
                 
     if updated:
         db.session.commit()
@@ -399,6 +362,7 @@ def get_me(current_user):
         'is_active': current_user.is_active,
         'active_investments_count': active_count,
         'daily_yield_sum': round(daily_yield, 2),
+        'platform_notice': get_setting('platform_notice', 'Join GrowthWorld Today and Unlock Daily Rewards, Team Bonuses, VIP Benefits & Free Wednesday Withdrawals!'),
         'referred_by': current_user.referred_by.email if current_user.referred_by else None
     })
 
@@ -420,7 +384,7 @@ def update_bank_details(current_user):
 
 @app.route('/api/plans', methods=['GET'])
 def list_plans():
-    plans = InvestmentPlan.query.filter_by(is_active=True).all()
+    plans = InvestmentPlan.query.all()
     plans_data = []
     for plan in plans:
         plans_data.append({
@@ -429,7 +393,8 @@ def list_plans():
             'price': plan.price,
             'daily_earning_min': plan.daily_earning_min,
             'daily_earning_max': plan.daily_earning_max,
-            'duration_days': plan.duration_days
+            'duration_days': plan.duration_days,
+            'is_active': plan.is_active
         })
     return jsonify(plans_data)
 
@@ -496,14 +461,14 @@ def purchase_plan(current_user):
 def process_referral_commissions(buyer, amount):
     """
     Distributes commission to referred managers up to 3 levels.
-    Level 1: 10%
-    Level 2: 5%
-    Level 3: 2%
+    Level A: 10%
+    Level B: 2%
+    Level C: 0.5%
     """
     levels = [
-        (1, 0.10, 'Level 1 Referral Bonus'),
-        (2, 0.05, 'Level 2 Referral Bonus'),
-        (3, 0.02, 'Level 3 Referral Bonus')
+        (1, 0.10, 'Level A Referral Bonus'),
+        (2, 0.02, 'Level B Referral Bonus'),
+        (3, 0.005, 'Level C Referral Bonus')
     ]
 
     current_parent = buyer.referred_by
@@ -534,6 +499,9 @@ def process_referral_commissions(buyer, amount):
 @app.route('/api/tasks', methods=['GET'])
 @token_required
 def get_daily_tasks(current_user):
+    active_investments = UserInvestment.query.filter_by(user_id=current_user.id, status='active').all()
+    has_active_plan = len(active_investments) > 0
+    
     today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
     progress = UserTaskProgress.query.filter_by(user_id=current_user.id, date=today).first()
     
@@ -550,26 +518,35 @@ def get_daily_tasks(current_user):
             cooldown_seconds = int(86400 - diff.total_seconds())
 
     # Task list (custom clickable earn items)
-    tasks = [
-        {'id': 1, 'name': 'Ad Link 1: Grow Money Tips', 'reward': 10.0, 'completed': completed >= 1},
-        {'id': 2, 'name': 'Ad Link 2: Crypto Investing Guide', 'reward': 10.0, 'completed': completed >= 2},
-        {'id': 3, 'name': 'Ad Link 3: High Yield Platforms', 'reward': 10.0, 'completed': completed >= 3},
-        {'id': 4, 'name': 'Ad Link 4: Fintech News Wrap-up', 'reward': 10.0, 'completed': completed >= 4},
-        {'id': 5, 'name': 'Ad Link 5: GrowthWorld Tutorials', 'reward': 10.0, 'completed': completed >= 5},
-    ]
+    tasks = []
+    if has_active_plan:
+        tasks = [
+            {'id': 1, 'name': 'Ad Link 1: Grow Money Tips', 'reward': 10.0, 'completed': completed >= 1},
+            {'id': 2, 'name': 'Ad Link 2: Crypto Investing Guide', 'reward': 10.0, 'completed': completed >= 2},
+            {'id': 3, 'name': 'Ad Link 3: High Yield Platforms', 'reward': 10.0, 'completed': completed >= 3},
+            {'id': 4, 'name': 'Ad Link 4: Fintech News Wrap-up', 'reward': 10.0, 'completed': completed >= 4},
+            {'id': 5, 'name': 'Ad Link 5: GrowthWorld Tutorials', 'reward': 10.0, 'completed': completed >= 5},
+        ]
+
+    daily_reward_amt = round(sum(inv.daily_earning for inv in active_investments), 2) if has_active_plan else 0.0
 
     return jsonify({
+        'has_active_plan': has_active_plan,
         'tasks': tasks,
         'completed_count': completed,
         'reward_claimed': claimed,
         'cooldown_active': cooldown,
         'cooldown_remaining_seconds': cooldown_seconds,
-        'daily_reward_amt': float(get_setting('daily_task_reward', '50'))
+        'daily_reward_amt': daily_reward_amt
     })
 
 @app.route('/api/tasks/complete', methods=['POST'])
 @token_required
 def complete_task(current_user):
+    active_investments = UserInvestment.query.filter_by(user_id=current_user.id, status='active').all()
+    if not active_investments:
+        return jsonify({'message': 'You must have an active investment plan to perform daily tasks.'}), 400
+
     today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
     progress = UserTaskProgress.query.filter_by(user_id=current_user.id, date=today).first()
     
@@ -592,6 +569,10 @@ def complete_task(current_user):
 @app.route('/api/tasks/claim', methods=['POST'])
 @token_required
 def claim_task_reward(current_user):
+    active_investments = UserInvestment.query.filter_by(user_id=current_user.id, status='active').all()
+    if not active_investments:
+        return jsonify({'message': 'You must have an active investment plan to claim rewards.'}), 400
+
     today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
     progress = UserTaskProgress.query.filter_by(user_id=current_user.id, date=today).first()
     
@@ -610,12 +591,18 @@ def claim_task_reward(current_user):
             remaining_m = int(((86400 - diff.total_seconds()) % 3600) // 60)
             return jsonify({'message': f'Cooldown active. Please wait {remaining_h}h {remaining_m}m to claim again.'}), 400
 
-    reward_amt = float(get_setting('daily_task_reward', '50'))
+    # The reward amount is the sum of daily earnings from active investments
+    reward_amt = round(sum(inv.daily_earning for inv in active_investments), 2)
     
     # Credit balance
     current_user.wallet_balance += reward_amt
     current_user.last_task_claim_at = now
     progress.reward_claimed = True
+
+    # Update inv.last_payout_at for each active investment to track when it was paid
+    for inv in active_investments:
+        inv.last_payout_at = now
+        db.session.add(inv)
 
     # Log Transaction
     tx = Transaction(
@@ -623,7 +610,7 @@ def claim_task_reward(current_user):
         amount=reward_amt,
         type='task_reward',
         status='approved',
-        description=f"Daily Click & Earn Reward"
+        description=f"Daily Click & Earn Task Reward"
     )
     
     db.session.add(current_user)
@@ -885,19 +872,25 @@ def get_withdrawal_breakdown(current_user):
     except ValueError:
         return jsonify({'message': 'Invalid amount.'}), 400
 
-    fee_pct = float(get_setting('withdrawal_fee_pct', '10'))
-    fee = round(amount * (fee_pct / 100.0), 2)
+    utc_now = datetime.datetime.utcnow()
+    ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
+    is_wednesday = (ist_now.weekday() == 2) # Monday is 0, Wednesday is 2
+
+    if is_wednesday:
+        fee_pct = 0.0
+        fee = 0.0
+    else:
+        fee_pct = float(get_setting('withdrawal_fee_pct', '10'))
+        fee = round(amount * (fee_pct / 100.0), 2)
+        
     payout = round(amount - fee, 2)
-    min_withdrawal = float(get_setting('min_withdrawal', '160'))
+    min_withdrawal = float(get_setting('min_withdrawal', '300'))
 
     # Checks
     insufficient = current_user.wallet_balance < amount
     below_min = amount < min_withdrawal
 
     # Verify time window (10 AM - 6 PM IST)
-    # Since server time is UTC, let's offset to India Time (+5:30)
-    utc_now = datetime.datetime.utcnow()
-    ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
     current_hour = ist_now.hour
     allowed_time = 10 <= current_hour < 18
 
@@ -908,6 +901,7 @@ def get_withdrawal_breakdown(current_user):
         'amount': amount,
         'fee': fee,
         'fee_percent': fee_pct,
+        'is_wednesday': is_wednesday,
         'payout_amount': payout,
         'min_withdrawal': min_withdrawal,
         'current_balance': current_user.wallet_balance,
@@ -941,7 +935,7 @@ def request_withdrawal(current_user):
     except ValueError:
         return jsonify({'message': 'Invalid amount.'}), 400
 
-    min_withdrawal = float(get_setting('min_withdrawal', '160'))
+    min_withdrawal = float(get_setting('min_withdrawal', '300'))
     if amount < min_withdrawal:
         return jsonify({'message': f'Minimum withdrawal amount is ₹{min_withdrawal}.'}), 400
 
@@ -959,9 +953,14 @@ def request_withdrawal(current_user):
     if not current_user.upi_id and not (current_user.bank_name and current_user.account_number):
         return jsonify({'message': 'Please update your UPI ID or Bank account details in Profile Settings first.'}), 400
 
-    # Platform fee calculations
-    fee_pct = float(get_setting('withdrawal_fee_pct', '10'))
-    fee = round(amount * (fee_pct / 100.0), 2)
+    # Platform fee calculations (Wednesday is fee-free)
+    is_wednesday = (ist_now.weekday() == 2)
+    if is_wednesday:
+        fee_pct = 0.0
+        fee = 0.0
+    else:
+        fee_pct = float(get_setting('withdrawal_fee_pct', '10'))
+        fee = round(amount * (fee_pct / 100.0), 2)
 
     # Immediately lock/deduct the full withdrawal amount to prevent double spending
     current_user.wallet_balance -= amount
@@ -1258,7 +1257,8 @@ def admin_settings(current_user):
             'qr_code_filename': get_setting('qr_code_filename', 'default_qr.png'),
             'withdrawal_fee_pct': float(get_setting('withdrawal_fee_pct', '10')),
             'daily_task_reward': float(get_setting('daily_task_reward', '50')),
-            'min_withdrawal': float(get_setting('min_withdrawal', '160')),
+            'min_withdrawal': float(get_setting('min_withdrawal', '300')),
+            'platform_notice': get_setting('platform_notice', 'Join GrowthWorld Today and Unlock Daily Rewards, Team Bonuses, VIP Benefits & Free Wednesday Withdrawals!'),
             'salary_level_a_referrals': int(get_setting('salary_level_a_referrals', '12')),
             'salary_level_b_referrals': int(get_setting('salary_level_b_referrals', '30')),
             'salary_level_c_referrals': int(get_setting('salary_level_c_referrals', '100')),
@@ -1323,7 +1323,8 @@ def seed_database():
         set_setting('qr_code_filename', 'default_qr.png')
         set_setting('withdrawal_fee_pct', '10')
         set_setting('daily_task_reward', '50')
-        set_setting('min_withdrawal', '160')
+        set_setting('min_withdrawal', '300')
+        set_setting('platform_notice', 'Join GrowthWorld Today and Unlock Daily Rewards, Team Bonuses, VIP Benefits & Free Wednesday Withdrawals!')
         set_setting('salary_level_a_referrals', '12')
         set_setting('salary_level_b_referrals', '30')
         set_setting('salary_level_c_referrals', '100')
@@ -1331,17 +1332,26 @@ def seed_database():
         set_setting('salary_level_b_amount', '15000')
         set_setting('salary_level_c_amount', '60000')
 
+    # Migration: Delete old plans if migrating to the new system
+    if InvestmentPlan.query.filter_by(price=1200).first() is not None:
+        UserInvestment.query.delete()
+        InvestmentPlan.query.delete()
+        db.session.commit()
+
     # Seed Default Plans if none exist
     if InvestmentPlan.query.count() == 0:
         default_plans = [
-            InvestmentPlan(name='Starter Plan', price=1200, daily_earning_min=40, daily_earning_max=60, duration_days=30),
-            InvestmentPlan(name='Bronze Plan', price=3000, daily_earning_min=110, daily_earning_max=150, duration_days=35),
-            InvestmentPlan(name='Silver Plan', price=6000, daily_earning_min=230, daily_earning_max=300, duration_days=40),
-            InvestmentPlan(name='Gold Plan', price=12000, daily_earning_min=480, daily_earning_max=600, duration_days=45),
-            InvestmentPlan(name='Platinum Plan', price=25000, daily_earning_min=1100, daily_earning_max=1350, duration_days=50),
-            InvestmentPlan(name='Diamond Plan', price=50000, daily_earning_min=2300, daily_earning_max=2800, duration_days=55),
-            InvestmentPlan(name='Crown Plan', price=100000, daily_earning_min=4800, daily_earning_max=5800, duration_days=60),
-            InvestmentPlan(name='GrowthWorld Elite', price=200000, daily_earning_min=10000, daily_earning_max=12000, duration_days=90),
+            # Active Plans
+            InvestmentPlan(name='Starter Active Plan', price=1500, daily_earning_min=90, daily_earning_max=105, duration_days=50, is_active=True),
+            InvestmentPlan(name='Bronze Active Plan', price=2200, daily_earning_min=132, daily_earning_max=154, duration_days=50, is_active=True),
+            InvestmentPlan(name='Silver Active Plan', price=4500, daily_earning_min=270, daily_earning_max=315, duration_days=50, is_active=True),
+            InvestmentPlan(name='Gold Active Plan', price=8000, daily_earning_min=480, daily_earning_max=560, duration_days=50, is_active=True),
+            
+            # Upcoming Plans (is_active = False)
+            InvestmentPlan(name='Platinum Upcoming', price=15000, daily_earning_min=900, daily_earning_max=1050, duration_days=50, is_active=False),
+            InvestmentPlan(name='Diamond Upcoming', price=30000, daily_earning_min=1800, daily_earning_max=2100, duration_days=50, is_active=False),
+            InvestmentPlan(name='Crown Upcoming', price=65000, daily_earning_min=3900, daily_earning_max=4550, duration_days=50, is_active=False),
+            InvestmentPlan(name='GrowthWorld Elite', price=90000, daily_earning_min=5400, daily_earning_max=6300, duration_days=50, is_active=False),
         ]
         db.session.add_all(default_plans)
         

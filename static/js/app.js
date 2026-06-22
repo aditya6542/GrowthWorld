@@ -304,6 +304,12 @@ function updateUserProfileDOM() {
     document.getElementById('wallet-bank-name').value = state.user.bank_name || '';
     document.getElementById('wallet-bank-acc').value = state.user.account_number || '';
     document.getElementById('wallet-bank-ifsc').value = state.user.ifsc_code || '';
+
+    // Render notice board text
+    const noticeBoard = document.getElementById('notice-board-text');
+    if (noticeBoard && state.user.platform_notice) {
+        noticeBoard.textContent = state.user.platform_notice;
+    }
 }
 
 function handleLogout() {
@@ -464,33 +470,89 @@ function renderPlans() {
         return;
     }
 
-    state.plans.forEach(plan => {
-        const card = document.createElement('div');
-        card.className = 'plan-card';
-        card.innerHTML = `
-            <div class="plan-name">${plan.name}</div>
-            <div class="plan-price-box">
-                <div class="plan-price-label">Price</div>
-                <div class="plan-price-val">₹${plan.price.toLocaleString('en-IN')}</div>
-            </div>
-            <div class="plan-specs">
-                <div class="plan-spec-item">
-                    <span class="label">Daily Earning:</span>
-                    <span class="val text-success">₹${plan.daily_earning_min} - ₹${plan.daily_earning_max}</span>
+    const activePlans = state.plans.filter(p => p.is_active);
+    const upcomingPlans = state.plans.filter(p => !p.is_active);
+
+    if (activePlans.length > 0) {
+        const activeHeader = document.createElement('h3');
+        activeHeader.style.gridColumn = '1 / -1';
+        activeHeader.style.textAlign = 'left';
+        activeHeader.style.margin = '16px 0';
+        activeHeader.style.fontSize = '20px';
+        activeHeader.style.color = 'var(--color-success)';
+        activeHeader.textContent = 'Active Plans';
+        container.appendChild(activeHeader);
+
+        activePlans.forEach(plan => {
+            const card = document.createElement('div');
+            card.className = 'plan-card';
+            card.innerHTML = `
+                <div class="plan-name">${plan.name}</div>
+                <div class="plan-price-box">
+                    <div class="plan-price-label">Price</div>
+                    <div class="plan-price-val">₹${plan.price.toLocaleString('en-IN')}</div>
                 </div>
-                <div class="plan-spec-item">
-                    <span class="label">Duration:</span>
-                    <span class="val">${plan.duration_days} Days</span>
+                <div class="plan-specs">
+                    <div class="plan-spec-item">
+                        <span class="label">Daily Return (6%-7%):</span>
+                        <span class="val text-success">₹${plan.daily_earning_min} - ₹${plan.daily_earning_max}</span>
+                    </div>
+                    <div class="plan-spec-item">
+                        <span class="label">Duration:</span>
+                        <span class="val">${plan.duration_days} Days</span>
+                    </div>
+                    <div class="plan-spec-item">
+                        <span class="label">Total Profit:</span>
+                        <span class="val">₹${(plan.daily_earning_min * plan.duration_days).toFixed(0)} - ₹${(plan.daily_earning_max * plan.duration_days).toFixed(0)}</span>
+                    </div>
                 </div>
-                <div class="plan-spec-item">
-                    <span class="label">Total Return:</span>
-                    <span class="val">₹${(plan.daily_earning_min * plan.duration_days).toFixed(0)} - ₹${(plan.daily_earning_max * plan.duration_days).toFixed(0)}</span>
+                <button class="btn btn-primary btn-block" onclick="buyPlan(${plan.id}, '${plan.name}', ${plan.price})">Activate Plan</button>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    if (upcomingPlans.length > 0) {
+        const upcomingHeader = document.createElement('h3');
+        upcomingHeader.style.gridColumn = '1 / -1';
+        upcomingHeader.style.textAlign = 'left';
+        upcomingHeader.style.margin = '32px 0 16px 0';
+        upcomingHeader.style.fontSize = '20px';
+        upcomingHeader.style.color = 'var(--text-muted)';
+        upcomingHeader.style.borderTop = '1px solid var(--border-color)';
+        upcomingHeader.style.paddingTop = '24px';
+        upcomingHeader.textContent = 'Upcoming Plans';
+        container.appendChild(upcomingHeader);
+
+        upcomingPlans.forEach(plan => {
+            const card = document.createElement('div');
+            card.className = 'plan-card disabled';
+            card.style.opacity = '0.6';
+            card.innerHTML = `
+                <div class="plan-name" style="color: var(--text-muted);">${plan.name}</div>
+                <div class="plan-price-box">
+                    <div class="plan-price-label">Price</div>
+                    <div class="plan-price-val" style="color: var(--text-muted);">₹${plan.price.toLocaleString('en-IN')}</div>
                 </div>
-            </div>
-            <button class="btn btn-primary btn-block" onclick="buyPlan(${plan.id}, '${plan.name}', ${plan.price})">Activate Plan</button>
-        `;
-        container.appendChild(card);
-    });
+                <div class="plan-specs">
+                    <div class="plan-spec-item">
+                        <span class="label">Daily Return (6%-7%):</span>
+                        <span class="val text-muted">₹${plan.daily_earning_min} - ₹${plan.daily_earning_max}</span>
+                    </div>
+                    <div class="plan-spec-item">
+                        <span class="label">Duration:</span>
+                        <span class="val">${plan.duration_days} Days</span>
+                    </div>
+                    <div class="plan-spec-item">
+                        <span class="label">Total Profit:</span>
+                        <span class="val">₹${(plan.daily_earning_min * plan.duration_days).toFixed(0)} - ₹${(plan.daily_earning_max * plan.duration_days).toFixed(0)}</span>
+                    </div>
+                </div>
+                <button class="btn btn-outline btn-block disabled" disabled style="background: rgba(255,255,255,0.02);">Locked / Coming Soon</button>
+            `;
+            container.appendChild(card);
+        });
+    }
 }
 
 async function buyPlan(planId, name, price) {
@@ -511,7 +573,17 @@ async function loadTasksData() {
     const res = await apiCall('/api/tasks');
     if (res.success) {
         state.tasks = res.data.tasks;
-        renderTasks(res.data);
+        const noPlanWarning = document.getElementById('tasks-no-plan-warning');
+        const mainLayout = document.getElementById('tasks-main-layout');
+        
+        if (res.data.has_active_plan) {
+            if (noPlanWarning) noPlanWarning.classList.add('hidden');
+            if (mainLayout) mainLayout.classList.remove('hidden');
+            renderTasks(res.data);
+        } else {
+            if (noPlanWarning) noPlanWarning.classList.remove('hidden');
+            if (mainLayout) mainLayout.classList.add('hidden');
+        }
     }
 }
 
@@ -1238,13 +1310,22 @@ async function loadAdminPlans() {
         res.data.forEach(plan => {
             const item = document.createElement('div');
             item.className = 'admin-plan-item';
+            
+            const badge = plan.is_active 
+                ? '<span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10B981; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; margin-left: 10px;">Active</span>'
+                : '<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #F59E0B; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; margin-left: 10px;">Upcoming / Inactive</span>';
+                
+            const actionBtn = plan.is_active 
+                ? `<button class="btn btn-danger btn-small" onclick="togglePlanActive(${plan.id}, false)">Deactivate</button>`
+                : `<button class="btn btn-success btn-small" style="background: #10B981; border-color: #10B981;" onclick="togglePlanActive(${plan.id}, true)">Activate</button>`;
+
             item.innerHTML = `
                 <div class="admin-plan-info">
-                    <h4>${plan.name}</h4>
-                    <p>Price: <strong>₹${plan.price}</strong> | Yield: <strong>₹${plan.daily_earning_min} - ₹${plan.daily_earning_max}/day</strong> | Duration: <strong>${plan.duration_days} Days</strong></p>
+                    <h4 style="display: flex; align-items: center; margin: 0; color: #fff;">${plan.name} ${badge}</h4>
+                    <p style="margin: 6px 0 0 0; font-size: 13px; color: var(--text-muted);">Price: <strong>₹${plan.price}</strong> | Yield: <strong>₹${plan.daily_earning_min} - ₹${plan.daily_earning_max}/day</strong> | Duration: <strong>${plan.duration_days} Days</strong></p>
                 </div>
                 <div class="admin-plan-actions">
-                    <button class="btn btn-danger btn-small" onclick="deletePlan(${plan.id})">Deactivate</button>
+                    ${actionBtn}
                 </div>
             `;
             listContainer.appendChild(item);
@@ -1275,11 +1356,12 @@ async function handleAddPlan(e) {
     }
 }
 
-async function deletePlan(planId) {
-    const confirmDel = confirm('Are you sure you want to deactivate this plan? Users will no longer be able to purchase it.');
-    if (!confirmDel) return;
+async function togglePlanActive(planId, activate) {
+    const actionText = activate ? 'activate' : 'deactivate';
+    const confirmAction = confirm(`Are you sure you want to ${actionText} this plan?`);
+    if (!confirmAction) return;
 
-    const res = await apiCall('/api/admin/plans', 'DELETE', { id: planId });
+    const res = await apiCall('/api/admin/plans', 'PUT', { id: planId, is_active: activate });
     if (res.success) {
         showToast(res.data.message, 'success');
         loadAdminPlans();
@@ -1304,6 +1386,9 @@ async function loadAdminSettings() {
         document.getElementById('set-sal-b-amt').value = res.data.salary_level_b_amount;
         document.getElementById('set-sal-c-ref').value = res.data.salary_level_c_referrals;
         document.getElementById('set-sal-c-amt').value = res.data.salary_level_c_amount;
+        
+        // Notice Board message
+        document.getElementById('set-notice').value = res.data.platform_notice || '';
     }
 }
 
@@ -1319,6 +1404,7 @@ async function handleUpdateSettings(e) {
     formData.append('withdrawal_fee_pct', document.getElementById('set-fee').value);
     formData.append('min_withdrawal', document.getElementById('set-min-with').value);
     formData.append('daily_task_reward', document.getElementById('set-task-reward').value);
+    formData.append('platform_notice', document.getElementById('set-notice').value);
 
     formData.append('salary_level_a_referrals', document.getElementById('set-sal-a-ref').value);
     formData.append('salary_level_a_amount', document.getElementById('set-sal-a-amount').value);

@@ -1,6 +1,7 @@
 import pytest
 import datetime
 import jwt
+import app as app_module
 from app import app, db, User, InvestmentPlan, UserInvestment, UserTaskProgress, Transaction, PlatformSetting, hash_password
 
 @pytest.fixture
@@ -22,7 +23,7 @@ def client():
         set_setting('crypto_bep20_address', 'test_bep20')
         set_setting('withdrawal_fee_pct', '10')
         set_setting('daily_task_reward', '50')
-        set_setting('min_withdrawal', '160')
+        set_setting('min_withdrawal', '300')
         set_setting('salary_level_a_referrals', '12')
         set_setting('salary_level_a_amount', '5000')
         set_setting('salary_level_b_referrals', '30')
@@ -31,8 +32,8 @@ def client():
         set_setting('salary_level_c_amount', '60000')
 
         # Seed test plans
-        plan1 = InvestmentPlan(name='Starter Test Plan', price=1200, daily_earning_min=40, daily_earning_max=60, duration_days=30)
-        plan2 = InvestmentPlan(name='Bronze Test Plan', price=3000, daily_earning_min=110, daily_earning_max=150, duration_days=35)
+        plan1 = InvestmentPlan(name='Starter Test Plan', price=1500, daily_earning_min=90, daily_earning_max=105, duration_days=50, is_active=True)
+        plan2 = InvestmentPlan(name='Bronze Test Plan', price=2200, daily_earning_min=132, daily_earning_max=154, duration_days=50, is_active=True)
         db.session.add(plan1)
         db.session.add(plan2)
         
@@ -119,7 +120,8 @@ def test_purchase_plan_and_referrals(client):
 
     # Get Plan ID
     plans = client.get('/api/plans').get_json()
-    plan_id = plans[0]['id'] # Starter Plan (price = 1200)
+    # Find active plan Starter Active Plan (price = 1500)
+    plan_id = [p['id'] for p in plans if p['price'] == 1500][0]
 
     # UserC purchases plan
     res_buy = client.post('/api/plans/purchase', headers=headers_c, json={'plan_id': plan_id})
@@ -128,31 +130,54 @@ def test_purchase_plan_and_referrals(client):
     # Verify wallets and transaction logs for commissions
     with app.app_context():
         user_c = User.query.filter_by(email='userc@test.com').first()
-        user_b = User.query.filter_by(email='userb@test.com').first() # Level 1 parent gets 10%
-        user_a = User.query.filter_by(email='usera@test.com').first() # Level 2 parent gets 5%
+        user_b = User.query.filter_by(email='userb@test.com').first() # Level A parent gets 10%
+        user_a = User.query.filter_by(email='usera@test.com').first() # Level B parent gets 2%
         
-        # UserC balance: 2000 - 1200 = 800
-        assert user_c.wallet_balance == 800.0
-        # UserB balance: 1200 * 0.10 = 120
-        assert user_b.wallet_balance == 120.0
-        # UserA balance: 1200 * 0.05 = 60
-        assert user_a.wallet_balance == 60.0
+        # UserC balance: 2000 - 1500 = 500
+        assert user_c.wallet_balance == 500.0
+        # UserB balance: 1500 * 0.10 = 150
+        assert user_b.wallet_balance == 150.0
+        # UserA balance: 1500 * 0.02 = 30
+        assert user_a.wallet_balance == 30.0
 
         # Check transactions logged
         tx_b = Transaction.query.filter_by(user_id=user_b.id, type='referral_bonus').first()
         assert tx_b is not None
-        assert tx_b.amount == 120.0
+        assert tx_b.amount == 150.0
 
 def test_daily_tasks(client):
     # Register user
     res = client.post('/api/auth/signup', json={'email': 'taskuser@test.com', 'phone': '5555555555', 'password': 'password123'})
     headers = {'Authorization': f"Bearer {res.get_json()['token']}"}
 
-    # Fetch initial tasks
+    # Fetch initial tasks before purchasing a plan -> has_active_plan should be False
+    res_tasks_pre = client.get('/api/tasks', headers=headers).get_json()
+    assert res_tasks_pre['has_active_plan'] is False
+    assert len(res_tasks_pre['tasks']) == 0
+
+    # Try completing task without active plan -> should fail
+    res_comp_fail = client.post('/api/tasks/complete', headers=headers)
+    assert res_comp_fail.status_code == 400
+
+    # Credit user to purchase a plan
+    with app.app_context():
+        user = User.query.filter_by(email='taskuser@test.com').first()
+        user.wallet_balance = 2000.0
+        db.session.commit()
+
+    plans = client.get('/api/plans').get_json()
+    plan_id = [p['id'] for p in plans if p['price'] == 1500][0]
+    res_buy = client.post('/api/plans/purchase', headers=headers, json={'plan_id': plan_id})
+    assert res_buy.status_code == 200
+
+    # Fetch tasks after purchasing a plan -> has_active_plan should be True
     res_tasks = client.get('/api/tasks', headers=headers).get_json()
+    assert res_tasks['has_active_plan'] is True
     assert len(res_tasks['tasks']) == 5
     assert res_tasks['completed_count'] == 0
     assert res_tasks['reward_claimed'] is False
+    daily_reward_amt = res_tasks['daily_reward_amt']
+    assert 90.0 <= daily_reward_amt <= 105.0
 
     # Complete 5 tasks sequentially
     for i in range(5):
@@ -165,10 +190,10 @@ def test_daily_tasks(client):
     assert res_claim.status_code == 200
     assert 'successfully claimed' in res_claim.get_json()['message']
 
-    # Verify wallet has task reward (₹50)
+    # Verify wallet has task reward (2000 - 1500 + daily_reward_amt)
     with app.app_context():
         user = User.query.filter_by(email='taskuser@test.com').first()
-        assert user.wallet_balance == 50.0
+        assert abs(user.wallet_balance - (500.0 + daily_reward_amt)) < 0.01
 
     # Test Cooldown (claim again should fail)
     res_claim_again = client.post('/api/tasks/claim', headers=headers)
@@ -189,32 +214,36 @@ def test_withdrawals_constraints(client):
         user.wallet_balance = 1000.0
         db.session.commit()
 
-    # Get breakdown
-    res_bd = client.post('/api/withdrawals/breakdown', headers=headers, json={'amount': 500})
-    assert res_bd.status_code == 200
-    bd = res_bd.get_json()
-    assert bd['amount'] == 500.0
-    assert bd['fee'] == 50.0 # 10%
-    assert bd['payout_amount'] == 450.0
+    from app import datetime as app_datetime
+    original_datetime = app_datetime.datetime
 
-    # Submit withdrawal request
-    # Note: local test execution might fail time window checks if run outside 10 AM - 6 PM IST.
-    # To bypass this in testing, let's mock or check response message
-    res_with = client.post('/api/withdrawals', headers=headers, json={'amount': 500})
-    
-    # If it fails due to time window check (outside 10 AM - 6 PM IST)
-    # the endpoint returns 400 with "only permitted between 10:00 AM and 6:00 PM IST."
-    # Let's inspect the message
-    json_data = res_with.get_json()
-    if res_with.status_code == 400 and "only permitted" in json_data.get('message', ''):
-        # Time check succeeded correctly (its working as designed)
-        pass
-    else:
+    class MockDatetimeThu(original_datetime):
+        @classmethod
+        def utcnow(cls):
+            # Thursday (e.g. 2026-06-25 is Thursday), 12:00:00 (allowed IST hour: 17:30 IST)
+            return cls(2026, 6, 25, 12, 0, 0)
+
+    try:
+        app_module.datetime.datetime = MockDatetimeThu
+
+        # Get breakdown (fee should be 10%)
+        res_bd = client.post('/api/withdrawals/breakdown', headers=headers, json={'amount': 500})
+        assert res_bd.status_code == 200
+        bd = res_bd.get_json()
+        assert bd['amount'] == 500.0
+        assert bd['fee'] == 50.0 # 10%
+        assert bd['payout_amount'] == 450.0
+
+        # Submit withdrawal request
+        res_with = client.post('/api/withdrawals', headers=headers, json={'amount': 500})
         assert res_with.status_code == 200
+        
         # Verify wallet deducted
         with app.app_context():
             user = User.query.filter_by(email='withdrawuser@test.com').first()
             assert user.wallet_balance == 500.0 # 1000 - 500
+    finally:
+        app_module.datetime.datetime = original_datetime
 
 def test_salary_system(client):
     # Create Manager User
@@ -246,7 +275,7 @@ def test_salary_system(client):
         db.session.commit()
 
     plans = client.get('/api/plans').get_json()
-    plan_id = plans[0]['id']
+    plan_id = [p['id'] for p in plans if p['price'] == 1500][0]
 
     for tok in ref_tokens:
         client.post('/api/plans/purchase', headers={'Authorization': f'Bearer {tok}'}, json={'plan_id': plan_id})
@@ -264,9 +293,9 @@ def test_salary_system(client):
     with app.app_context():
         mgr = User.query.filter_by(email='manager@test.com').first()
         # Earned 5000 from salary + referral commission!
-        # Commissions: 12 referrals * (1200 price * 10% rate) = 1440 commission.
-        # Total: 5000 + 1440 = 6440.
-        assert mgr.wallet_balance == 6440.0
+        # Commissions: 12 referrals * (1500 price * 10% rate) = 1800 commission.
+        # Total: 5000 + 1800 = 6800.
+        assert mgr.wallet_balance == 6800.0
 
 def test_admin_approvals(client):
     admin_headers = get_auth_headers(client, 'admin@growthworld.com', 'AdminPassword123')
@@ -305,3 +334,56 @@ def test_admin_approvals(client):
     with app.app_context():
         user = User.query.filter_by(email='depuser@test.com').first()
         assert user.wallet_balance == 1500.0
+
+def test_wednesday_withdrawal_free(client):
+    # Register and credit user
+    res = client.post('/api/auth/signup', json={
+        'email': 'weduser@test.com', 
+        'phone': '9000000099', 
+        'password': 'password123',
+        'upi_id': 'wed@upi'
+    })
+    headers = {'Authorization': f"Bearer {res.get_json()['token']}"}
+
+    with app.app_context():
+        user = User.query.filter_by(email='weduser@test.com').first()
+        user.wallet_balance = 1000.0
+        db.session.commit()
+
+    from app import datetime as app_datetime
+    original_datetime = app_datetime.datetime
+    
+    class MockDatetimeWed(original_datetime):
+        @classmethod
+        def utcnow(cls):
+            # Wednesday (e.g. 2026-06-24 is Wednesday)
+            return cls(2026, 6, 24, 12, 0, 0)
+            
+    class MockDatetimeThu(original_datetime):
+        @classmethod
+        def utcnow(cls):
+            # Thursday (e.g. 2026-06-25 is Thursday)
+            return cls(2026, 6, 25, 12, 0, 0)
+    
+    try:
+        app_module.datetime.datetime = MockDatetimeWed
+        
+        res_bd = client.post('/api/withdrawals/breakdown', headers=headers, json={'amount': 500})
+        assert res_bd.status_code == 200
+        bd = res_bd.get_json()
+        assert bd['is_wednesday'] is True
+        assert bd['fee'] == 0.0
+        assert bd['payout_amount'] == 500.0
+        
+        # Test Thursday (10% Fee)
+        app_module.datetime.datetime = MockDatetimeThu
+        
+        res_bd_thu = client.post('/api/withdrawals/breakdown', headers=headers, json={'amount': 500})
+        assert res_bd_thu.status_code == 200
+        bd_thu = res_bd_thu.get_json()
+        assert bd_thu['is_wednesday'] is False
+        assert bd_thu['fee'] == 50.0
+        assert bd_thu['payout_amount'] == 450.0
+        
+    finally:
+        app_module.datetime.datetime = original_datetime
