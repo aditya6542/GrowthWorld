@@ -265,6 +265,9 @@ def test_salary_system(client):
     # Verify active referrals count is 0 because they don't have active plans
     res_status = client.get('/api/salary', headers=mgr_headers).get_json()
     assert res_status['active_referrals'] == 0
+    assert res_status['level_a_amount'] == 5000.0
+    assert res_status['level_b_amount'] == 15000.0
+    assert res_status['level_c_amount'] == 60000.0
 
     # Buy plans for all 12 users to make them active
     # Credit their wallets first

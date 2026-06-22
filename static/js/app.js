@@ -830,6 +830,21 @@ async function loadSalaryData() {
         document.getElementById('salary-current-tier').textContent = res.data.current_tier;
         document.getElementById('salary-claim-amount').textContent = `₹${res.data.eligible_amount.toFixed(2)}`;
 
+        // Update milestone requirements and amounts dynamically from configured settings
+        const tierAReqEl = document.getElementById('label-tier-a-req');
+        const tierAAmtEl = document.getElementById('label-tier-a-amt');
+        const tierBReqEl = document.getElementById('label-tier-b-req');
+        const tierBAmtEl = document.getElementById('label-tier-b-amt');
+        const tierCReqEl = document.getElementById('label-tier-c-req');
+        const tierCAmtEl = document.getElementById('label-tier-c-amt');
+
+        if (tierAReqEl) tierAReqEl.textContent = `${res.data.level_a_requirement} active users`;
+        if (tierAAmtEl) tierAAmtEl.textContent = `₹${res.data.level_a_amount.toLocaleString('en-IN')} / month`;
+        if (tierBReqEl) tierBReqEl.textContent = `${res.data.level_b_requirement} active users`;
+        if (tierBAmtEl) tierBAmtEl.textContent = `₹${res.data.level_b_amount.toLocaleString('en-IN')} / month`;
+        if (tierCReqEl) tierCReqEl.textContent = `${res.data.level_c_requirement} active users`;
+        if (tierCAmtEl) tierCAmtEl.textContent = `₹${res.data.level_c_amount.toLocaleString('en-IN')} / month`;
+
         // Describe tier details
         const detailsEl = document.getElementById('salary-tier-details');
         const claimBtn = document.getElementById('claim-salary-btn');
