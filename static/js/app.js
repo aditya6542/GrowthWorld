@@ -1461,11 +1461,11 @@ async function handleUpdateSettings(e) {
     formData.append('platform_notice', document.getElementById('set-notice').value);
 
     formData.append('salary_level_a_referrals', document.getElementById('set-sal-a-ref').value);
-    formData.append('salary_level_a_amount', document.getElementById('set-sal-a-amount').value);
+    formData.append('salary_level_a_amount', document.getElementById('set-sal-a-amt').value);
     formData.append('salary_level_b_referrals', document.getElementById('set-sal-b-ref').value);
-    formData.append('salary_level_b_amount', document.getElementById('set-sal-b-amount').value);
+    formData.append('salary_level_b_amount', document.getElementById('set-sal-b-amt').value);
     formData.append('salary_level_c_referrals', document.getElementById('set-sal-c-ref').value);
-    formData.append('salary_level_c_amount', document.getElementById('set-sal-c-amount').value);
+    formData.append('salary_level_c_amount', document.getElementById('set-sal-c-amt').value);
 
     const fileInput = document.getElementById('set-qrcode-file');
     if (fileInput.files.length > 0) {
