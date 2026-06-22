@@ -2148,3 +2148,91 @@ button:disabled {
         width: 100%;
     }
 }
+
+/* ==========================================================================
+   LOGO & PREMIUM AESTHETIC ENHANCEMENTS
+   ========================================================================== */
+.logo-img {
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.logo-img:hover {
+    transform: translateY(-2px) scale(1.05);
+    border-color: rgba(59, 130, 246, 0.45);
+    box-shadow: 0 0 25px rgba(59, 130, 246, 0.4), 0 8px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* Glassmorphism & Neon Glow for Cards */
+.metric-card, .plan-card, .task-status-card, .task-item-card, .notice-board-card, .dashboard-card {
+    position: relative;
+    overflow: hidden;
+    backdrop-filter: blur(16px);
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.metric-card::after, .plan-card::after, .task-status-card::after, .task-item-card::after, .notice-board-card::after, .dashboard-card::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Specific glows on Hover */
+.metric-card:hover {
+    border-color: rgba(59, 130, 246, 0.25);
+    box-shadow: 0 10px 25px rgba(59, 130, 246, 0.1), 0 4px 12px rgba(0, 0, 0, 0.2);
+    transform: translateY(-4px);
+}
+
+.task-item-card:hover {
+    border-color: rgba(16, 185, 129, 0.25);
+    box-shadow: 0 10px 25px rgba(16, 185, 129, 0.1), 0 4px 12px rgba(0, 0, 0, 0.2);
+    transform: translateY(-4px);
+}
+
+.notice-board-card {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.05) 0%, rgba(15, 22, 42, 0.7) 100%) !important;
+    border: 1px solid rgba(245, 158, 11, 0.15) !important;
+    box-shadow: inset 0 0 12px rgba(245, 158, 11, 0.05), 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.announcement-banner {
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.2) !important;
+}
+
+/* Custom glow effect on button hovers */
+.btn-primary:hover:not(.disabled) {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.6), 0 6px 16px rgba(59, 130, 246, 0.3) !important;
+}
+
+.btn-success:hover:not(.disabled) {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.6), 0 6px 16px rgba(16, 185, 129, 0.3) !important;
+}
+
+/* Background glowing blob decoration */
+.bg-blob {
+    position: absolute;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(59, 130, 246, 0.05) 0%, transparent 70%);
+    z-index: -2;
+    pointer-events: none;
+}
+
+.bg-blob-1 {
+    top: -200px;
+    left: -200px;
+}
+
+.bg-blob-2 {
+    bottom: -200px;
+    right: -200px;
+}
