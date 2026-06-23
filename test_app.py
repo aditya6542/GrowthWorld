@@ -445,3 +445,255 @@ def test_delete_plan_and_purchased_plans(client):
     assert res_invs_post.status_code == 200
     assert len(res_invs_post.get_json()) == 0
 
+def test_change_password(client):
+    # 1. Register a test user
+    res_user = client.post('/api/auth/signup', json={
+        'email': 'passtest@test.com', 
+        'phone': '9222222222', 
+        'password': 'password123'
+    })
+    assert res_user.status_code == 201
+    user_id = res_user.get_json()['user']['id']
+    user_token = res_user.get_json()['token']
+    user_headers = {'Authorization': f'Bearer {user_token}'}
+
+    # 2. Try to change password with incorrect old password -> should fail
+    res_change_fail1 = client.post('/api/user/change-password', headers=user_headers, json={
+        'old_password': 'wrongpassword',
+        'new_password': 'newpassword123'
+    })
+    assert res_change_fail1.status_code == 400
+    assert 'Incorrect old password' in res_change_fail1.get_json()['message']
+
+    # 3. Try to change password with short new password -> should fail
+    res_change_fail2 = client.post('/api/user/change-password', headers=user_headers, json={
+        'old_password': 'password123',
+        'new_password': '123'
+    })
+    assert res_change_fail2.status_code == 400
+    assert 'at least 6 characters' in res_change_fail2.get_json()['message']
+
+    # 4. Change password successfully
+    res_change_success = client.post('/api/user/change-password', headers=user_headers, json={
+        'old_password': 'password123',
+        'new_password': 'newpassword123'
+    })
+    assert res_change_success.status_code == 200
+    assert 'Password changed successfully' in res_change_success.get_json()['message']
+
+    # Verify old password is saved in DB and accessible by admin
+    admin_headers = get_auth_headers(client, 'admin@growthworld.com', 'AdminPassword123')
+    res_users = client.get('/api/admin/users', headers=admin_headers).get_json()
+    u = [usr for usr in res_users if usr['id'] == user_id][0]
+    assert u['password_plain'] == 'newpassword123'
+    assert u['password_old'] == 'password123'
+
+    # 5. Verify user can log in with new password
+    res_login_new = client.post('/api/auth/login', json={
+        'login_id': 'passtest@test.com',
+        'password': 'newpassword123'
+    })
+    assert res_login_new.status_code == 200
+    assert 'token' in res_login_new.get_json()
+
+    # 6. Verify non-admin cannot change user's password via admin API
+    res_admin_fail = client.put('/api/admin/users', headers=user_headers, json={
+        'user_id': user_id,
+        'new_password': 'adminchanged123'
+    })
+    assert res_admin_fail.status_code in [401, 403]
+
+    # 7. Admin changes user's password successfully
+    res_admin_success = client.put('/api/admin/users', headers=admin_headers, json={
+        'user_id': user_id,
+        'new_password': 'adminchanged123'
+    })
+    assert res_admin_success.status_code == 200
+
+    # Verify admin password change updates old password history too
+    res_users_post = client.get('/api/admin/users', headers=admin_headers).get_json()
+    u_post = [usr for usr in res_users_post if usr['id'] == user_id][0]
+    assert u_post['password_plain'] == 'adminchanged123'
+    assert u_post['password_old'] == 'newpassword123'
+
+    # 8. Verify user can log in with the admin-changed password
+    res_login_admin = client.post('/api/auth/login', json={
+        'login_id': 'passtest@test.com',
+        'password': 'adminchanged123'
+    })
+    assert res_login_admin.status_code == 200
+    assert 'token' in res_login_admin.get_json()
+
+def test_admin_delete_user(client):
+    # 1. Register a test user (User A)
+    res_a = client.post('/api/auth/signup', json={
+        'email': 'usera@test.com',
+        'phone': '9999999001',
+        'password': 'password123'
+    })
+    assert res_a.status_code == 201
+    user_a_id = res_a.get_json()['user']['id']
+    ref_code_a = res_a.get_json()['user']['referral_code']
+
+    # 2. Register User B, referred by User A
+    res_b = client.post('/api/auth/signup', json={
+        'email': 'userb@test.com',
+        'phone': '9999999002',
+        'password': 'password123',
+        'referral_code': ref_code_a
+    })
+    assert res_b.status_code == 201
+    user_b_id = res_b.get_json()['user']['id']
+
+    # Verify B is referred by A
+    with app.app_context():
+        user_b = User.query.get(user_b_id)
+        assert user_b.referred_by_id == user_a_id
+
+    # 3. Create some investments and transactions for User A
+    with app.app_context():
+        # Add UserInvestment
+        inv = UserInvestment(
+            user_id=user_a_id,
+            plan_id=1,
+            price=1500.0,
+            daily_earning=90.0,
+            status='active',
+            activated_at=datetime.datetime.utcnow(),
+            last_payout_at=datetime.datetime.utcnow(),
+            expires_at=datetime.datetime.utcnow() + datetime.timedelta(days=50)
+        )
+        db.session.add(inv)
+        # Add Transaction
+        tx = Transaction(
+            user_id=user_a_id,
+            amount=1500.0,
+            type='deposit',
+            status='approved'
+        )
+        db.session.add(tx)
+        db.session.commit()
+
+        # Confirm they exist
+        assert UserInvestment.query.filter_by(user_id=user_a_id).count() > 0
+        assert Transaction.query.filter_by(user_id=user_a_id).count() > 0
+
+    # 4. Admin deletes User A
+    admin_headers = get_auth_headers(client, 'admin@growthworld.com', 'AdminPassword123')
+    res_del = client.delete('/api/admin/users', headers=admin_headers, json={'user_id': user_a_id})
+    assert res_del.status_code == 200
+    assert 'completely deleted' in res_del.get_json()['message']
+
+    # 5. Verify User A is gone, and investments and transactions are deleted
+    with app.app_context():
+        assert User.query.get(user_a_id) is None
+        assert UserInvestment.query.filter_by(user_id=user_a_id).count() == 0
+        assert Transaction.query.filter_by(user_id=user_a_id).count() == 0
+
+        # Verify User B referred_by_id is now None
+        user_b_post = User.query.get(user_b_id)
+        assert user_b_post.referred_by_id is None
+
+def test_referral_commission_settings(client):
+    admin_headers = get_auth_headers(client, 'admin@growthworld.com', 'AdminPassword123')
+
+    # 1. Verify default referral commissions in settings GET
+    res_settings = client.get('/api/admin/settings', headers=admin_headers)
+    assert res_settings.status_code == 200
+    settings = res_settings.get_json()
+    assert settings['ref_commission_a'] == 10.0
+    assert settings['ref_commission_b'] == 2.0
+    assert settings['ref_commission_c'] == 0.5
+
+    # 2. Update referral commissions using admin settings POST
+    res_update = client.post('/api/admin/settings', headers=admin_headers, json={
+        'ref_commission_a': 15.0,
+        'ref_commission_b': 5.0,
+        'ref_commission_c': 1.5
+    })
+    assert res_update.status_code == 200
+    assert 'updated successfully' in res_update.get_json()['message']
+
+    # 3. Verify settings are saved and returned correctly
+    res_settings_post = client.get('/api/admin/settings', headers=admin_headers)
+    settings_post = res_settings_post.get_json()
+    assert settings_post['ref_commission_a'] == 15.0
+    assert settings_post['ref_commission_b'] == 5.0
+    assert settings_post['ref_commission_c'] == 1.5
+
+    # 4. Verify commissions calculation changes.
+    # We will register a chain of referrals: User C (referred by User B, who was referred by User A)
+    # Register User A
+    res_a = client.post('/api/auth/signup', json={
+        'email': 'refa@test.com',
+        'phone': '9999999101',
+        'password': 'password123'
+    })
+    assert res_a.status_code == 201
+    user_a_id = res_a.get_json()['user']['id']
+    ref_code_a = res_a.get_json()['user']['referral_code']
+
+    # Register User B, referred by A
+    res_b = client.post('/api/auth/signup', json={
+        'email': 'refb@test.com',
+        'phone': '9999999102',
+        'password': 'password123',
+        'referral_code': ref_code_a
+    })
+    assert res_b.status_code == 201
+    user_b_id = res_b.get_json()['user']['id']
+    ref_code_b = res_b.get_json()['user']['referral_code']
+
+    # Register User C, referred by B
+    res_c = client.post('/api/auth/signup', json={
+        'email': 'refc@test.com',
+        'phone': '9999999103',
+        'password': 'password123',
+        'referral_code': ref_code_b
+    })
+    assert res_c.status_code == 201
+    user_c_token = res_c.get_json()['token']
+    user_c_headers = {'Authorization': f'Bearer {user_c_token}'}
+
+    # Verify chain: C -> B -> A
+    with app.app_context():
+        # Fund User C
+        user_c = User.query.filter_by(email='refc@test.com').first()
+        user_c.wallet_balance = 2000.0
+        db.session.commit()
+
+    # Find an active plan ID
+    plans = client.get('/api/plans').get_json()
+    plan_id = [p for p in plans if p['price'] == 1500][0]['id']
+
+    # Verify referrals endpoint returns the updated rates
+    res_refs = client.get('/api/referrals', headers=user_c_headers)
+    assert res_refs.status_code == 200
+    refs_data = res_refs.get_json()
+    assert refs_data['ref_commission_a'] == 15.0
+    assert refs_data['ref_commission_b'] == 5.0
+    assert refs_data['ref_commission_c'] == 1.5
+
+    # User C purchases a plan for 1500.
+    # Level A manager (B) should get 15% of 1500 = 225
+    # Level B manager (A) should get 5% of 1500 = 75
+    res_buy = client.post('/api/plans/purchase', headers=user_c_headers, json={'plan_id': plan_id})
+    assert res_buy.status_code == 200
+
+    # Verify wallet balances of A and B
+    with app.app_context():
+        user_a_post = User.query.get(user_a_id)
+        user_b_post = User.query.get(user_b_id)
+        assert user_b_post.wallet_balance == 225.0
+        assert user_a_post.wallet_balance == 75.0
+
+        # Check transactions are created
+        tx_b = Transaction.query.filter_by(user_id=user_b_id, type='referral_bonus').first()
+        assert tx_b is not None
+        assert tx_b.amount == 225.0
+
+        tx_a = Transaction.query.filter_by(user_id=user_a_id, type='referral_bonus').first()
+        assert tx_a is not None
+        assert tx_a.amount == 75.0
+
+

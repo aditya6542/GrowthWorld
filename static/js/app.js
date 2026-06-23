@@ -768,6 +768,13 @@ async function loadReferralData() {
         document.getElementById('ref-count-l2').textContent = `(${res.data.level2.length})`;
         document.getElementById('ref-count-l3').textContent = `(${res.data.level3.length})`;
 
+        const pctL1 = document.getElementById('ref-pct-l1');
+        const pctL2 = document.getElementById('ref-pct-l2');
+        const pctL3 = document.getElementById('ref-pct-l3');
+        if (pctL1) pctL1.textContent = res.data.ref_commission_a;
+        if (pctL2) pctL2.textContent = res.data.ref_commission_b;
+        if (pctL3) pctL3.textContent = res.data.ref_commission_c;
+
         renderReferralsTable();
     }
 }
@@ -874,9 +881,9 @@ async function loadSalaryData() {
         }
 
         // Update progress bars for timeline
-        updateSalaryMilestoneProgress(res.data.active_referrals, res.data.level_a_requirement, 'a', 12);
-        updateSalaryMilestoneProgress(res.data.active_referrals, res.data.level_b_requirement, 'b', 30);
-        updateSalaryMilestoneProgress(res.data.active_referrals, res.data.level_c_requirement, 'c', 100);
+        updateSalaryMilestoneProgress(res.data.active_referrals, res.data.level_a_requirement, 'a', res.data.level_a_requirement);
+        updateSalaryMilestoneProgress(res.data.active_referrals, res.data.level_b_requirement, 'b', res.data.level_b_requirement);
+        updateSalaryMilestoneProgress(res.data.active_referrals, res.data.level_c_requirement, 'c', res.data.level_c_requirement);
     }
 }
 
@@ -1312,16 +1319,27 @@ async function loadAdminUsers() {
                     <div style="font-weight:600;">${u.email}</div>
                     <div class="text-muted text-small">Phone: ${u.phone}</div>
                 </td>
+                <td style="font-family: monospace; color: var(--color-warning);">${u.password_plain || 'N/A'}</td>
+                <td style="font-family: monospace; color: var(--text-muted);">${u.password_old || 'N/A'}</td>
                 <td style="font-weight:700;">₹${u.wallet_balance.toFixed(2)}</td>
                 <td class="text-small">${destination}</td>
                 <td>${activePlanBadge}</td>
                 <td>
-                    <button class="btn btn-outline btn-small" onclick="toggleAdminPrivilege(${u.id}, ${!u.is_admin})">${u.is_admin ? 'Demote' : 'Make Admin'}</button>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                        <button class="btn btn-outline btn-small" onclick="toggleAdminPrivilege(${u.id}, ${!u.is_admin})">${u.is_admin ? 'Demote' : 'Make Admin'}</button>
+                        <button class="btn btn-danger btn-small" onclick="deleteUserCompletely(${u.id}, '${u.email}')">Delete User</button>
+                    </div>
                 </td>
                 <td>
-                    <div style="display:flex; gap:6px;">
-                        <input type="number" id="adj-bal-${u.id}" placeholder="New Bal" style="width:90px; padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:rgba(255,255,255,0.02); color:#fff; font-size:12px;">
-                        <button class="btn btn-primary btn-small btn-small" onclick="adjustUserBalance(${u.id})">Set</button>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                        <div style="display:flex; gap:6px;">
+                            <input type="number" id="adj-bal-${u.id}" placeholder="New Bal" style="width:90px; padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:rgba(255,255,255,0.02); color:#fff; font-size:12px;">
+                            <button class="btn btn-primary btn-small" onclick="adjustUserBalance(${u.id})">Balance</button>
+                        </div>
+                        <div style="display:flex; gap:6px;">
+                            <input type="text" id="change-pass-${u.id}" placeholder="New Pass" style="width:90px; padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:rgba(255,255,255,0.02); color:#fff; font-size:12px;">
+                            <button class="btn btn-warning btn-small" onclick="adminChangeUserPassword(${u.id})">Pass</button>
+                        </div>
                     </div>
                 </td>
             `;
@@ -1351,6 +1369,34 @@ async function adjustUserBalance(userId) {
     if (res.success) {
         showToast(res.data.message, 'success');
         input.value = '';
+        loadAdminUsers();
+    }
+}
+
+async function adminChangeUserPassword(userId) {
+    const input = document.getElementById(`change-pass-${userId}`);
+    const password = input.value;
+
+    if (!password || password.length < 6) {
+        showToast('Password must be at least 6 characters.', 'warning');
+        return;
+    }
+
+    const res = await apiCall('/api/admin/users', 'PUT', { user_id: userId, new_password: password });
+    if (res.success) {
+        showToast(res.data.message, 'success');
+        input.value = '';
+        loadAdminUsers();
+    }
+}
+
+async function deleteUserCompletely(userId, email) {
+    const confirmDel = confirm(`WARNING: Are you sure you want to completely delete user "${email}"?\n\nThis will permanently delete this user and ALL their investments, transactions, and task progress! This action cannot be undone.`);
+    if (!confirmDel) return;
+
+    const res = await apiCall('/api/admin/users', 'DELETE', { user_id: userId });
+    if (res.success) {
+        showToast(res.data.message, 'success');
         loadAdminUsers();
     }
 }
@@ -1455,6 +1501,11 @@ async function loadAdminSettings() {
         document.getElementById('set-sal-b-amt').value = res.data.salary_level_b_amount;
         document.getElementById('set-sal-c-ref').value = res.data.salary_level_c_referrals;
         document.getElementById('set-sal-c-amt').value = res.data.salary_level_c_amount;
+
+        // Referral Commission Rates
+        document.getElementById('set-ref-a').value = res.data.ref_commission_a;
+        document.getElementById('set-ref-b').value = res.data.ref_commission_b;
+        document.getElementById('set-ref-c').value = res.data.ref_commission_c;
         
         // Notice Board message
         document.getElementById('set-notice').value = res.data.platform_notice || '';
@@ -1482,6 +1533,10 @@ async function handleUpdateSettings(e) {
     formData.append('salary_level_c_referrals', document.getElementById('set-sal-c-ref').value);
     formData.append('salary_level_c_amount', document.getElementById('set-sal-c-amt').value);
 
+    formData.append('ref_commission_a', document.getElementById('set-ref-a').value);
+    formData.append('ref_commission_b', document.getElementById('set-ref-b').value);
+    formData.append('ref_commission_c', document.getElementById('set-ref-c').value);
+
     const fileInput = document.getElementById('set-qrcode-file');
     if (fileInput.files.length > 0) {
         formData.append('qr_code', fileInput.files[0]);
@@ -1492,6 +1547,9 @@ async function handleUpdateSettings(e) {
         showToast(res.data.message, 'success');
         fileInput.value = ''; // Reset file input
         loadAdminSettings();
+        loadSalaryData();
+        loadDashboardData();
+        loadReferralData();
     }
 }
 
@@ -1546,4 +1604,25 @@ function copyText(elementId) {
     const text = document.getElementById(elementId).textContent;
     navigator.clipboard.writeText(text);
     showToast('Copied to clipboard!', 'success');
+}
+
+async function handleUserChangePassword(e) {
+    e.preventDefault();
+    const oldPassword = document.getElementById('user-old-password').value;
+    const newPassword = document.getElementById('user-new-password').value;
+
+    if (newPassword.length < 6) {
+        showToast('New password must be at least 6 characters.', 'warning');
+        return;
+    }
+
+    const res = await apiCall('/api/user/change-password', 'POST', {
+        old_password: oldPassword,
+        new_password: newPassword
+    });
+
+    if (res.success) {
+        showToast(res.data.message, 'success');
+        document.getElementById('user-change-password-form').reset();
+    }
 }

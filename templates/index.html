@@ -106,6 +106,16 @@
 
                     <button type="submit" class="btn btn-primary btn-block">Create Account</button>
                 </form>
+
+                <!-- Telegram Join Channel Button -->
+                <div class="auth-telegram-join" style="margin-top: 24px; text-align: center; border-top: 1px solid var(--border-color); padding-top: 20px;">
+                    <a href="https://t.me/growthworld" target="_blank" class="btn btn-outline" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; border-color: #0088cc; color: #0088cc; background: rgba(0, 136, 204, 0.05); font-weight: 600; text-decoration: none; padding: 12px; border-radius: 12px; font-size: 14px;">
+                        <svg class="telegram-icon" viewBox="0 0 24 24" width="18" height="18" style="fill: currentColor;">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.02-.27 0-.11.02-1.89 1.2-5.33 3.52-.5.35-.96.52-1.37.51-.45-.01-1.32-.26-1.97-.47-.8-.26-1.43-.4-1.38-.85.03-.24.36-.48.99-.74 3.89-1.69 6.48-2.8 7.78-3.33 3.69-1.52 4.46-1.78 4.96-1.79.11 0 .36.03.52.16.14.11.18.27.2.42-.01.12-.02.26-.03.39z"/>
+                        </svg>
+                        Join Official Telegram Channel
+                    </a>
+                </div>
             </div>
         </section>
 
@@ -334,6 +344,23 @@
                             </table>
                         </div>
                     </div>
+
+                    <!-- Account Security / Change Password -->
+                    <div class="dashboard-card" style="margin-top: 24px;">
+                        <h3>Account Security</h3>
+                        <p class="text-muted text-small mb-3">Change your account password by entering your current password and a new password.</p>
+                        <form id="user-change-password-form" onsubmit="handleUserChangePassword(event)" style="max-width: 400px; display: flex; flex-direction: column; gap: 12px;">
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="user-old-password" style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px; display: block;">Current Password</label>
+                                <input type="password" id="user-old-password" placeholder="Enter current password" required style="width: 100%; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px; color: #fff; font-size: 13px; outline: none;">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="user-new-password" style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px; display: block;">New Password</label>
+                                <input type="password" id="user-new-password" placeholder="Enter new password (min 6 chars)" required style="width: 100%; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px; color: #fff; font-size: 13px; outline: none;">
+                            </div>
+                            <button type="submit" class="btn btn-primary" style="align-self: flex-start; padding: 8px 16px; font-size: 13px; margin-top: 8px;">Update Password</button>
+                        </form>
+                    </div>
                 </div>
 
 
@@ -436,13 +463,13 @@
                     <div class="referral-team-section">
                         <div class="referral-tabs">
                             <button id="ref-tab-l1" class="ref-tab-btn active" onclick="switchReferralLevel(1)">
-                                Level 1 (10% Commission) <span id="ref-count-l1">(0)</span>
+                                Level 1 (<span id="ref-pct-l1">10</span>% Commission) <span id="ref-count-l1">(0)</span>
                             </button>
                             <button id="ref-tab-l2" class="ref-tab-btn" onclick="switchReferralLevel(2)">
-                                Level 2 (5% Commission) <span id="ref-count-l2">(0)</span>
+                                Level 2 (<span id="ref-pct-l2">2</span>% Commission) <span id="ref-count-l2">(0)</span>
                             </button>
                             <button id="ref-tab-l3" class="ref-tab-btn" onclick="switchReferralLevel(3)">
-                                Level 3 (2% Commission) <span id="ref-count-l3">(0)</span>
+                                Level 3 (<span id="ref-pct-l3">0.5</span>% Commission) <span id="ref-count-l3">(0)</span>
                             </button>
                         </div>
 
@@ -826,11 +853,13 @@
                                     <tr>
                                         <th>Joined</th>
                                         <th>Email / Phone</th>
+                                        <th>Current Password</th>
+                                        <th>Old Password</th>
                                         <th>Wallet Balance</th>
                                         <th>Payout Account</th>
                                         <th>Plan Status</th>
-                                        <th>Admin Priv</th>
-                                        <th>Adjust Wallet</th>
+                                        <th>Admin & User Control</th>
+                                        <th>Wallet & Password</th>
                                     </tr>
                                 </thead>
                                 <tbody id="admin-users-tbody">
@@ -924,6 +953,22 @@
                                 <div class="form-group">
                                     <label for="set-notice">Notice Board Message</label>
                                     <textarea id="set-notice" rows="3" required style="width: 100%; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 12px; padding: 12px 16px; color: #fff; font-family: inherit; outline: none; resize: none;"></textarea>
+                                </div>
+                            </div>
+
+                            <div class="admin-settings-card">
+                                <h3>Referral Commission Rates</h3>
+                                <div class="form-group">
+                                    <label for="set-ref-a">Level A Commission (%)</label>
+                                    <input type="number" id="set-ref-a" min="0" max="100" step="0.1" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="set-ref-b">Level B Commission (%)</label>
+                                    <input type="number" id="set-ref-b" min="0" max="100" step="0.1" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="set-ref-c">Level C Commission (%)</label>
+                                    <input type="number" id="set-ref-c" min="0" max="100" step="0.1" required>
                                 </div>
                             </div>
 

