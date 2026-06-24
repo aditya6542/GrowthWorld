@@ -16,16 +16,26 @@ if os.path.exists('/data'):
     DATA_DIR = '/data'
     UPLOAD_FOLDER = '/data/uploads'
 else:
-    DATA_DIR = os.path.join(app.root_path, 'instance')
-    UPLOAD_FOLDER = os.path.join(app.root_path, 'static', 'uploads')
+    # Use user's home directory to keep database and uploads safe from Git pulls/resets
+    home_dir = os.path.expanduser('~')
+    DATA_DIR = os.path.join(home_dir, '.growthworld')
+    UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 if 'pytest' in sys.modules or os.environ.get('PYTEST_CURRENT_TEST'):
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
 else:
-    db_path = os.path.join(DATA_DIR, 'growthworld.db')
-    app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+    # Check if DATABASE_URL environment variable is set (e.g. for external PostgreSQL/MySQL databases)
+    database_url = os.environ.get('DATABASE_URL')
+    if database_url:
+        # Flask-SQLAlchemy needs 'postgresql://' instead of 'postgres://' for PostgreSQL URIs
+        if database_url.startswith('postgres://'):
+            database_url = database_url.replace('postgres://', 'postgresql://', 1)
+        app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+    else:
+        db_path = os.path.join(DATA_DIR, 'growthworld.db')
+        app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
