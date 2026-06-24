@@ -1519,9 +1519,13 @@ async function loadAdminSettings() {
         document.getElementById('set-ref-b').value = res.data.ref_commission_b;
         document.getElementById('set-ref-c').value = res.data.ref_commission_c;
         
-        // Staking Interest Rate
+        // Staking Interest Rate & Limits
         const stakeRateEl = document.getElementById('set-stake-rate');
         if (stakeRateEl) stakeRateEl.value = res.data.staking_interest_rate;
+        const stakeMinAmountEl = document.getElementById('set-stake-min-amount');
+        if (stakeMinAmountEl) stakeMinAmountEl.value = res.data.staking_min_amount;
+        const stakeMinDurationEl = document.getElementById('set-stake-min-duration');
+        if (stakeMinDurationEl) stakeMinDurationEl.value = res.data.staking_min_duration;
 
         // Notice Board message
         document.getElementById('set-notice').value = res.data.platform_notice || '';
@@ -1556,6 +1560,14 @@ async function handleUpdateSettings(e) {
     const stakeRateEl = document.getElementById('set-stake-rate');
     if (stakeRateEl) {
         formData.append('staking_interest_rate', stakeRateEl.value);
+    }
+    const stakeMinAmountEl = document.getElementById('set-stake-min-amount');
+    if (stakeMinAmountEl) {
+        formData.append('staking_min_amount', stakeMinAmountEl.value);
+    }
+    const stakeMinDurationEl = document.getElementById('set-stake-min-duration');
+    if (stakeMinDurationEl) {
+        formData.append('staking_min_duration', stakeMinDurationEl.value);
     }
 
     const fileInput = document.getElementById('set-qrcode-file');
@@ -1652,13 +1664,35 @@ async function handleUserChangePassword(e) {
 // STAKING (FD) SYSTEM FRONTEND
 // ==========================================
 let stakingInterestRate = 1.5; // fallback rate
+let stakingMinAmount = 3500.0;
+let stakingMinDuration = 45;
 
 async function loadStakingData() {
     const res = await apiCall('/api/staking');
     if (res.success) {
         stakingInterestRate = res.data.staking_interest_rate;
+        stakingMinAmount = parseFloat(res.data.min_amount) || 3500.0;
+        stakingMinDuration = parseInt(res.data.min_duration) || 45;
+
         document.getElementById('staking-ui-rate').textContent = `${stakingInterestRate.toFixed(2)}%`;
         
+        const descEl = document.getElementById('staking-ui-desc');
+        if (descEl) {
+            descEl.textContent = `Lock amount for min ${stakingMinDuration} days. Earnings are paid back to your wallet at maturity.`;
+        }
+
+        const amountInput = document.getElementById('stake-amount');
+        if (amountInput) {
+            amountInput.min = stakingMinAmount;
+            amountInput.placeholder = `Min ₹${stakingMinAmount.toLocaleString()}`;
+        }
+
+        const durationInput = document.getElementById('stake-duration');
+        if (durationInput) {
+            durationInput.min = stakingMinDuration;
+            durationInput.placeholder = `Min ${stakingMinDuration} Days`;
+        }
+
         const tbody = document.getElementById('user-stakes-tbody');
         tbody.innerHTML = '';
         
@@ -1709,12 +1743,12 @@ async function handleCreateStake(e) {
     const amount = parseFloat(document.getElementById('stake-amount').value);
     const duration = parseInt(document.getElementById('stake-duration').value);
     
-    if (isNaN(amount) || amount < 3500) {
-        showToast('Minimum staking amount is ₹3,500.', 'warning');
+    if (isNaN(amount) || amount < stakingMinAmount) {
+        showToast(`Minimum staking amount is ₹${stakingMinAmount.toLocaleString()}.`, 'warning');
         return;
     }
-    if (isNaN(duration) || duration < 45) {
-        showToast('Minimum staking duration is 45 days.', 'warning');
+    if (isNaN(duration) || duration < stakingMinDuration) {
+        showToast(`Minimum staking duration is ${stakingMinDuration} days.`, 'warning');
         return;
     }
     

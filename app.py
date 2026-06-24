@@ -948,11 +948,13 @@ def user_staking(current_user):
             })
             
         rate = float(get_setting('staking_interest_rate', '1.5'))
+        min_amount = float(get_setting('staking_min_amount', '3500'))
+        min_duration = int(get_setting('staking_min_duration', '45'))
         return jsonify({
             'stakes': stakes_list,
             'staking_interest_rate': rate,
-            'min_duration': 45,
-            'min_amount': 3500.0,
+            'min_duration': min_duration,
+            'min_amount': min_amount,
             'wallet_balance': current_user.wallet_balance
         })
         
@@ -968,11 +970,14 @@ def user_staking(current_user):
         except (TypeError, ValueError):
             return jsonify({'message': 'Staking duration must be a valid integer.'}), 400
 
-        if amount < 3500.0:
-            return jsonify({'message': 'Minimum staking amount is ₹3,500.'}), 400
+        min_amount = float(get_setting('staking_min_amount', '3500'))
+        min_duration = int(get_setting('staking_min_duration', '45'))
+
+        if amount < min_amount:
+            return jsonify({'message': f'Minimum staking amount is ₹{min_amount:,.2f}.'}), 400
             
-        if duration_days < 45:
-            return jsonify({'message': 'Minimum staking duration is 45 days.'}), 400
+        if duration_days < min_duration:
+            return jsonify({'message': f'Minimum staking duration is {min_duration} days.'}), 400
             
         if current_user.wallet_balance < amount:
             return jsonify({'message': 'Insufficient wallet balance to stake.'}), 400
@@ -1542,6 +1547,8 @@ def admin_settings(current_user):
             'ref_commission_b': float(get_setting('ref_commission_b', '2')),
             'ref_commission_c': float(get_setting('ref_commission_c', '0.5')),
             'staking_interest_rate': float(get_setting('staking_interest_rate', '1.5')),
+            'staking_min_amount': float(get_setting('staking_min_amount', '3500')),
+            'staking_min_duration': int(get_setting('staking_min_duration', '45')),
         })
     elif request.method == 'POST':
         # Handle settings update (JSON or Form Multi-part for QR code upload)
@@ -1662,6 +1669,8 @@ def seed_database():
         set_setting('ref_commission_b', '2')
         set_setting('ref_commission_c', '0.5')
         set_setting('staking_interest_rate', '1.5')
+        set_setting('staking_min_amount', '3500')
+        set_setting('staking_min_duration', '45')
 
     # Migration: Delete old plans if migrating to the new system
     if InvestmentPlan.query.filter_by(price=1200).first() is not None:

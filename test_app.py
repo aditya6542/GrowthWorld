@@ -886,3 +886,72 @@ def test_task_auto_renew_ist(client):
     res_new_day = client.post('/api/tasks/complete', headers=headers)
     assert res_new_day.status_code == 200
     assert res_new_day.get_json()['completed_count'] == 1
+
+
+def test_staking_settings_update(client):
+    # Log in as admin
+    admin_headers = get_auth_headers(client, '9999999999', 'AdminPassword123')
+    
+    # 1. Update settings as admin
+    res_update = client.post('/api/admin/settings', json={
+        'upi_id': 'new@upi',
+        'crypto_trc20_address': 'new_trc20',
+        'crypto_bep20_address': 'new_bep20',
+        'withdrawal_fee_pct': 12.0,
+        'daily_task_reward': 60.0,
+        'min_withdrawal': 400.0,
+        'platform_notice': 'Welcome to the platform!',
+        'salary_level_a_referrals': 10,
+        'salary_level_b_referrals': 20,
+        'salary_level_c_referrals': 50,
+        'salary_level_a_amount': 4000.0,
+        'salary_level_b_amount': 10000.0,
+        'salary_level_c_amount': 50000.0,
+        'ref_commission_a': 10.0,
+        'ref_commission_b': 5.0,
+        'ref_commission_c': 1.0,
+        'staking_interest_rate': 2.5,
+        'staking_min_amount': 5000.0,
+        'staking_min_duration': 60
+    }, headers=admin_headers)
+    assert res_update.status_code == 200
+
+    # 2. Get settings as admin, verify update
+    res_get = client.get('/api/admin/settings', headers=admin_headers)
+    assert res_get.status_code == 200
+    settings = res_get.get_json()
+    assert settings['staking_interest_rate'] == 2.5
+    assert settings['staking_min_amount'] == 5000.0
+    assert settings['staking_min_duration'] == 60
+
+    # 3. Verify user's staking validation rules are now using the updated configuration
+    # Register regular user
+    res_user = client.post('/api/auth/signup', json={
+        'email': 'stake_user2@test.com',
+        'phone': '8888888899',
+        'password': 'password123'
+    })
+    assert res_user.status_code == 201
+    token = res_user.get_json()['token']
+    headers = {'Authorization': f'Bearer {token}'}
+    user_id = res_user.get_json()['user']['id']
+
+    # Set user balance
+    with app.app_context():
+        user = User.query.get(user_id)
+        user.wallet_balance = 10000.0
+        db.session.commit()
+
+    # Try staking with old limits (e.g. ₹4000 amount, which is < new min of ₹5000)
+    res_stake1 = client.post('/api/staking', json={'amount': 4000, 'duration_days': 60}, headers=headers)
+    assert res_stake1.status_code == 400
+    assert 'Minimum staking amount' in res_stake1.get_json()['message']
+
+    # Try staking with ₹5000 but only 50 days (which is < new min of 60 days)
+    res_stake2 = client.post('/api/staking', json={'amount': 5000, 'duration_days': 50}, headers=headers)
+    assert res_stake2.status_code == 400
+    assert 'Minimum staking duration' in res_stake2.get_json()['message']
+
+    # Stake successfully with ₹5000 for 60 days
+    res_stake3 = client.post('/api/staking', json={'amount': 5000, 'duration_days': 60}, headers=headers)
+    assert res_stake3.status_code == 200
