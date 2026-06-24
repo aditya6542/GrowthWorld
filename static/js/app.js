@@ -141,6 +141,12 @@ function navigateTo(viewId, params = {}) {
         case 'plans':
             loadPlansData();
             break;
+        case 'staking':
+            loadStakingData();
+            break;
+        case 'feedback':
+            loadFeedbackData();
+            break;
         case 'tasks':
             loadTasksData();
             break;
@@ -1169,6 +1175,12 @@ function switchAdminTab(tab) {
         case 'plans':
             loadAdminPlans();
             break;
+        case 'stakes':
+            loadAdminStakes();
+            break;
+        case 'feedbacks':
+            loadAdminFeedbacks();
+            break;
         case 'settings':
             loadAdminSettings();
             break;
@@ -1507,6 +1519,10 @@ async function loadAdminSettings() {
         document.getElementById('set-ref-b').value = res.data.ref_commission_b;
         document.getElementById('set-ref-c').value = res.data.ref_commission_c;
         
+        // Staking Interest Rate
+        const stakeRateEl = document.getElementById('set-stake-rate');
+        if (stakeRateEl) stakeRateEl.value = res.data.staking_interest_rate;
+
         // Notice Board message
         document.getElementById('set-notice').value = res.data.platform_notice || '';
     }
@@ -1536,6 +1552,11 @@ async function handleUpdateSettings(e) {
     formData.append('ref_commission_a', document.getElementById('set-ref-a').value);
     formData.append('ref_commission_b', document.getElementById('set-ref-b').value);
     formData.append('ref_commission_c', document.getElementById('set-ref-c').value);
+
+    const stakeRateEl = document.getElementById('set-stake-rate');
+    if (stakeRateEl) {
+        formData.append('staking_interest_rate', stakeRateEl.value);
+    }
 
     const fileInput = document.getElementById('set-qrcode-file');
     if (fileInput.files.length > 0) {
@@ -1624,5 +1645,194 @@ async function handleUserChangePassword(e) {
     if (res.success) {
         showToast(res.data.message, 'success');
         document.getElementById('user-change-password-form').reset();
+    }
+}
+
+// ==========================================
+// STAKING (FD) SYSTEM FRONTEND
+// ==========================================
+let stakingInterestRate = 1.5; // fallback rate
+
+async function loadStakingData() {
+    const res = await apiCall('/api/staking');
+    if (res.success) {
+        stakingInterestRate = res.data.staking_interest_rate;
+        document.getElementById('staking-ui-rate').textContent = `${stakingInterestRate.toFixed(2)}%`;
+        
+        const tbody = document.getElementById('user-stakes-tbody');
+        tbody.innerHTML = '';
+        
+        const stakes = res.data.stakes || [];
+        if (stakes.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="no-data">No staking history found.</td></tr>';
+        } else {
+            stakes.forEach(s => {
+                const row = document.createElement('tr');
+                const statusBadge = s.status === 'active'
+                    ? '<span class="badge badge-success">Active</span>'
+                    : '<span class="badge badge-pending">Matured</span>';
+                
+                row.innerHTML = `
+                    <td>${s.created_at}</td>
+                    <td style="font-weight:600;">₹${s.amount.toFixed(2)}</td>
+                    <td>${s.duration_days} Days</td>
+                    <td class="text-success" style="font-weight:700;">₹${s.total_expected_return.toFixed(2)}</td>
+                    <td>${statusBadge}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+        calculateStakingPreview();
+    }
+}
+
+function calculateStakingPreview() {
+    const amountInput = document.getElementById('stake-amount');
+    const durationInput = document.getElementById('stake-duration');
+    const dailyReturnEl = document.getElementById('stake-preview-daily');
+    const totalReturnEl = document.getElementById('stake-preview-total');
+    
+    if (!amountInput || !durationInput || !dailyReturnEl || !totalReturnEl) return;
+    
+    const amount = parseFloat(amountInput.value) || 0;
+    const duration = parseInt(durationInput.value) || 0;
+    
+    const dailyReturn = amount * (stakingInterestRate / 100);
+    const totalReturn = amount * (1.0 + (stakingInterestRate / 100) * duration);
+    
+    dailyReturnEl.textContent = `₹${dailyReturn.toFixed(2)}`;
+    totalReturnEl.textContent = `₹${totalReturn.toFixed(2)}`;
+}
+
+async function handleCreateStake(e) {
+    e.preventDefault();
+    const amount = parseFloat(document.getElementById('stake-amount').value);
+    const duration = parseInt(document.getElementById('stake-duration').value);
+    
+    if (isNaN(amount) || amount < 3500) {
+        showToast('Minimum staking amount is ₹3,500.', 'warning');
+        return;
+    }
+    if (isNaN(duration) || duration < 45) {
+        showToast('Minimum staking duration is 45 days.', 'warning');
+        return;
+    }
+    
+    const confirmStake = confirm(`Are you sure you want to stake ₹${amount.toFixed(2)} for ${duration} days?\n\nThis amount will be locked from your wallet and paid out automatically at maturity. This lock cannot be cancelled early.`);
+    if (!confirmStake) return;
+    
+    const res = await apiCall('/api/staking', 'POST', { amount, duration_days: duration });
+    if (res.success) {
+        showToast(res.data.message, 'success');
+        document.getElementById('staking-form').reset();
+        loadStakingData();
+        fetchProfile(); // update wallet balance
+    }
+}
+
+// ==========================================
+// FEEDBACK SYSTEM FRONTEND
+// ==========================================
+async function loadFeedbackData() {
+    const res = await apiCall('/api/feedback');
+    if (res.success) {
+        const tbody = document.getElementById('user-feedbacks-tbody');
+        tbody.innerHTML = '';
+        
+        const feedbacks = res.data || [];
+        if (feedbacks.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="2" class="no-data">You have not submitted any feedback yet.</td></tr>';
+        } else {
+            feedbacks.forEach(f => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td style="white-space: nowrap; width: 150px;">${f.created_at}</td>
+                    <td style="text-align: left; word-break: break-word;">${f.message}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+    }
+}
+
+async function handleSendFeedback(e) {
+    e.preventDefault();
+    const messageInput = document.getElementById('feedback-message');
+    const message = messageInput.value;
+    
+    if (!message || !message.trim()) {
+        showToast('Feedback message cannot be empty.', 'warning');
+        return;
+    }
+    
+    const res = await apiCall('/api/feedback', 'POST', { message });
+    if (res.success) {
+        showToast(res.data.message, 'success');
+        messageInput.value = '';
+        loadFeedbackData();
+    }
+}
+
+// ==========================================
+// ADMIN STAKES & FEEDBACKS FRONTEND
+// ==========================================
+async function loadAdminStakes() {
+    const res = await apiCall('/api/admin/stakes');
+    if (res.success) {
+        const tbody = document.getElementById('admin-stakes-tbody');
+        tbody.innerHTML = '';
+        
+        const stakes = res.data || [];
+        if (stakes.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="no-data">No staking history found.</td></tr>';
+        } else {
+            stakes.forEach(s => {
+                const row = document.createElement('tr');
+                const statusBadge = s.status === 'active'
+                    ? '<span class="badge badge-success">Active</span>'
+                    : '<span class="badge badge-pending">Matured</span>';
+                
+                row.innerHTML = `
+                    <td>${s.created_at}</td>
+                    <td>
+                        <div style="font-weight:600;">${s.user_email}</div>
+                        <div class="text-muted text-small">${s.user_phone}</div>
+                    </td>
+                    <td style="font-weight:600;">₹${s.amount.toFixed(2)}</td>
+                    <td>${s.duration_days} Days</td>
+                    <td>${s.interest_rate_pct.toFixed(2)}%</td>
+                    <td class="text-success" style="font-weight:700;">₹${s.total_expected_return.toFixed(2)}</td>
+                    <td>${s.expires_at}</td>
+                    <td>${statusBadge}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+    }
+}
+
+async function loadAdminFeedbacks() {
+    const res = await apiCall('/api/admin/feedbacks');
+    if (res.success) {
+        const tbody = document.getElementById('admin-feedbacks-tbody');
+        tbody.innerHTML = '';
+        
+        const feedbacks = res.data || [];
+        if (feedbacks.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="no-data">No feedbacks submitted.</td></tr>';
+        } else {
+            feedbacks.forEach(f => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td style="white-space: nowrap; width: 150px;">${f.created_at}</td>
+                    <td style="white-space: nowrap; width: 220px;">
+                        <div style="font-weight:600;">${f.user_email}</div>
+                        <div class="text-muted text-small">${f.user_phone}</div>
+                    </td>
+                    <td style="text-align: left; word-break: break-word;">${f.message}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
     }
 }

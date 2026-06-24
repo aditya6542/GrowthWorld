@@ -139,6 +139,29 @@ class PlatformSetting(db.Model):
     key = db.Column(db.String(100), primary_key=True)
     value = db.Column(db.Text, nullable=False)
 
+class UserFeedback(db.Model):
+    __tablename__ = 'user_feedbacks'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('feedbacks', lazy='dynamic'))
+
+class UserStake(db.Model):
+    __tablename__ = 'user_stakes'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    duration_days = db.Column(db.Integer, nullable=False)
+    interest_rate_pct = db.Column(db.Float, nullable=False)
+    total_expected_return = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    status = db.Column(db.String(20), default='active') # active, completed
+
+    user = db.relationship('User', backref=db.backref('stakes', lazy='dynamic'))
+
 # ==========================================
 # HELPERS
 # ==========================================
@@ -218,8 +241,9 @@ def admin_required(f):
 
 def process_lazy_payouts(user):
     """
-    Checks user's active investments. For any investment that has passed its
-    expiration date, updates its status to 'expired'. Payouts are claimed via tasks.
+    Checks user's active investments and active stakes.
+    For any investment/stake that has passed its expiration date,
+    updates status and credits staking returns back to wallet balance.
     """
     now = datetime.datetime.utcnow()
     active_investments = UserInvestment.query.filter_by(user_id=user.id, status='active').all()
@@ -229,6 +253,24 @@ def process_lazy_payouts(user):
         if inv.expires_at <= now:
             inv.status = 'expired'
             db.session.add(inv)
+            updated = True
+
+    active_stakes = UserStake.query.filter_by(user_id=user.id, status='active').all()
+    for stake in active_stakes:
+        if stake.expires_at <= now:
+            stake.status = 'completed'
+            user.wallet_balance += stake.total_expected_return
+            
+            tx = Transaction(
+                user_id=user.id,
+                amount=stake.total_expected_return,
+                type='stake_payout',
+                status='approved',
+                description=f"FD Staking payout matured: Principal + Interest (₹{stake.total_expected_return:.2f})"
+            )
+            db.session.add(stake)
+            db.session.add(user)
+            db.session.add(tx)
             updated = True
                 
     if updated:
@@ -283,7 +325,8 @@ def signup():
     # Handle Referral Code checking
     referred_by_id = None
     if ref_code:
-        parent = User.query.filter_by(referral_code=ref_code).first()
+        ref_code_clean = ref_code.strip().upper()
+        parent = User.query.filter_by(referral_code=ref_code_clean).first()
         if parent:
             referred_by_id = parent.id
         else:
@@ -571,21 +614,14 @@ def get_daily_tasks(current_user):
     active_investments = UserInvestment.query.filter_by(user_id=current_user.id, status='active').all()
     has_active_plan = len(active_investments) > 0
     
-    today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+    utc_now = datetime.datetime.utcnow()
+    ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
+    today = ist_now.strftime('%Y-%m-%d')
     progress = UserTaskProgress.query.filter_by(user_id=current_user.id, date=today).first()
     
     completed = progress.tasks_completed if progress else 0
     claimed = progress.reward_claimed if progress else False
     
-    # Check 24 hour cooldown on reward claim
-    cooldown = False
-    cooldown_seconds = 0
-    if current_user.last_task_claim_at:
-        diff = datetime.datetime.utcnow() - current_user.last_task_claim_at
-        if diff.total_seconds() < 86400:
-            cooldown = True
-            cooldown_seconds = int(86400 - diff.total_seconds())
-
     # Task list (custom clickable earn items)
     tasks = []
     if has_active_plan:
@@ -604,8 +640,8 @@ def get_daily_tasks(current_user):
         'tasks': tasks,
         'completed_count': completed,
         'reward_claimed': claimed,
-        'cooldown_active': cooldown,
-        'cooldown_remaining_seconds': cooldown_seconds,
+        'cooldown_active': False,
+        'cooldown_remaining_seconds': 0,
         'daily_reward_amt': daily_reward_amt
     })
 
@@ -616,7 +652,9 @@ def complete_task(current_user):
     if not active_investments:
         return jsonify({'message': 'You must have an active investment plan to perform daily tasks.'}), 400
 
-    today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+    utc_now = datetime.datetime.utcnow()
+    ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
+    today = ist_now.strftime('%Y-%m-%d')
     progress = UserTaskProgress.query.filter_by(user_id=current_user.id, date=today).first()
     
     if not progress:
@@ -627,7 +665,7 @@ def complete_task(current_user):
         return jsonify({'message': 'All 5 tasks for today are already completed.'}), 400
 
     progress.tasks_completed += 1
-    progress.last_task_completed_at = datetime.datetime.utcnow()
+    progress.last_task_completed_at = utc_now
     db.session.commit()
 
     return jsonify({
@@ -642,7 +680,9 @@ def claim_task_reward(current_user):
     if not active_investments:
         return jsonify({'message': 'You must have an active investment plan to claim rewards.'}), 400
 
-    today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+    utc_now = datetime.datetime.utcnow()
+    ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
+    today = ist_now.strftime('%Y-%m-%d')
     progress = UserTaskProgress.query.filter_by(user_id=current_user.id, date=today).first()
     
     if not progress or progress.tasks_completed < 5:
@@ -651,26 +691,17 @@ def claim_task_reward(current_user):
     if progress.reward_claimed:
         return jsonify({'message': 'Reward for today already claimed.'}), 400
 
-    # Cooldown checks
-    now = datetime.datetime.utcnow()
-    if current_user.last_task_claim_at:
-        diff = now - current_user.last_task_claim_at
-        if diff.total_seconds() < 86400:
-            remaining_h = int((86400 - diff.total_seconds()) // 3600)
-            remaining_m = int(((86400 - diff.total_seconds()) % 3600) // 60)
-            return jsonify({'message': f'Cooldown active. Please wait {remaining_h}h {remaining_m}m to claim again.'}), 400
-
     # The reward amount is the sum of daily earnings from active investments
     reward_amt = round(sum(inv.daily_earning for inv in active_investments), 2)
     
     # Credit balance
     current_user.wallet_balance += reward_amt
-    current_user.last_task_claim_at = now
+    current_user.last_task_claim_at = utc_now
     progress.reward_claimed = True
 
     # Update inv.last_payout_at for each active investment to track when it was paid
     for inv in active_investments:
-        inv.last_payout_at = now
+        inv.last_payout_at = utc_now
         db.session.add(inv)
 
     # Log Transaction
@@ -861,6 +892,130 @@ def claim_salary(current_user):
         'message': f'Monthly salary of ₹{claimable_amount} claimed successfully!',
         'wallet_balance': current_user.wallet_balance
     })
+
+# ==========================================
+# FEEDBACK SYSTEM API
+# ==========================================
+
+@app.route('/api/feedback', methods=['GET', 'POST'])
+@token_required
+def user_feedback(current_user):
+    if request.method == 'GET':
+        feedbacks = UserFeedback.query.filter_by(user_id=current_user.id).order_by(UserFeedback.created_at.desc()).all()
+        feedbacks_list = []
+        for f in feedbacks:
+            feedbacks_list.append({
+                'id': f.id,
+                'message': f.message,
+                'created_at': f.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            })
+        return jsonify(feedbacks_list)
+        
+    elif request.method == 'POST':
+        data = request.get_json() or {}
+        message = data.get('message')
+        if not message or not message.strip():
+            return jsonify({'message': 'Feedback message cannot be empty.'}), 400
+            
+        fb = UserFeedback(
+            user_id=current_user.id,
+            message=message.strip()
+        )
+        db.session.add(fb)
+        db.session.commit()
+        return jsonify({'message': 'Feedback submitted successfully! Thank you for your opinion.'})
+
+# ==========================================
+# STAKING (FD) SYSTEM API
+# ==========================================
+
+@app.route('/api/staking', methods=['GET', 'POST'])
+@token_required
+def user_staking(current_user):
+    if request.method == 'GET':
+        stakes = UserStake.query.filter_by(user_id=current_user.id).order_by(UserStake.created_at.desc()).all()
+        stakes_list = []
+        for s in stakes:
+            stakes_list.append({
+                'id': s.id,
+                'amount': s.amount,
+                'duration_days': s.duration_days,
+                'interest_rate_pct': s.interest_rate_pct,
+                'total_expected_return': s.total_expected_return,
+                'status': s.status,
+                'created_at': s.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'expires_at': s.expires_at.strftime('%Y-%m-%d %H:%M:%S')
+            })
+            
+        rate = float(get_setting('staking_interest_rate', '1.5'))
+        return jsonify({
+            'stakes': stakes_list,
+            'staking_interest_rate': rate,
+            'min_duration': 45,
+            'min_amount': 3500.0,
+            'wallet_balance': current_user.wallet_balance
+        })
+        
+    elif request.method == 'POST':
+        data = request.get_json() or {}
+        try:
+            amount = float(data.get('amount'))
+        except (TypeError, ValueError):
+            return jsonify({'message': 'Staking amount must be a valid number.'}), 400
+            
+        try:
+            duration_days = int(data.get('duration_days'))
+        except (TypeError, ValueError):
+            return jsonify({'message': 'Staking duration must be a valid integer.'}), 400
+
+        if amount < 3500.0:
+            return jsonify({'message': 'Minimum staking amount is ₹3,500.'}), 400
+            
+        if duration_days < 45:
+            return jsonify({'message': 'Minimum staking duration is 45 days.'}), 400
+            
+        if current_user.wallet_balance < amount:
+            return jsonify({'message': 'Insufficient wallet balance to stake.'}), 400
+
+        interest_rate = float(get_setting('staking_interest_rate', '1.5'))
+        # Simple daily interest yield: principal * (1 + (daily_rate/100) * days)
+        total_expected_return = round(amount * (1.0 + (interest_rate / 100.0) * duration_days), 2)
+
+        now = datetime.datetime.utcnow()
+        expires_at = now + datetime.timedelta(days=duration_days)
+
+        stake = UserStake(
+            user_id=current_user.id,
+            amount=amount,
+            duration_days=duration_days,
+            interest_rate_pct=interest_rate,
+            total_expected_return=total_expected_return,
+            created_at=now,
+            expires_at=expires_at,
+            status='active'
+        )
+
+        # Deduct wallet balance
+        current_user.wallet_balance -= amount
+
+        # Log transaction
+        tx = Transaction(
+            user_id=current_user.id,
+            amount=amount,
+            type='stake',
+            status='approved',
+            description=f"FD Staking: locked ₹{amount:.2f} for {duration_days} days at {interest_rate}% daily interest"
+        )
+
+        db.session.add(stake)
+        db.session.add(current_user)
+        db.session.add(tx)
+        db.session.commit()
+
+        return jsonify({
+            'message': f'Staked ₹{amount:.2f} successfully for {duration_days} days!',
+            'wallet_balance': current_user.wallet_balance
+        })
 
 # ==========================================
 # DEPOSITS SYSTEM API
@@ -1188,10 +1343,12 @@ def admin_users(current_user):
         # Unlink referrals referred by this user
         User.query.filter_by(referred_by_id=user.id).update({User.referred_by_id: None})
 
-        # Delete all user investments, transactions, tasks progress
+        # Delete all user investments, transactions, tasks progress, stakes, feedbacks
         UserInvestment.query.filter_by(user_id=user.id).delete()
         Transaction.query.filter_by(user_id=user.id).delete()
         UserTaskProgress.query.filter_by(user_id=user.id).delete()
+        UserFeedback.query.filter_by(user_id=user.id).delete()
+        UserStake.query.filter_by(user_id=user.id).delete()
 
         db.session.delete(user)
         db.session.commit()
@@ -1384,8 +1541,8 @@ def admin_settings(current_user):
             'ref_commission_a': float(get_setting('ref_commission_a', '10')),
             'ref_commission_b': float(get_setting('ref_commission_b', '2')),
             'ref_commission_c': float(get_setting('ref_commission_c', '0.5')),
+            'staking_interest_rate': float(get_setting('staking_interest_rate', '1.5')),
         })
-        
     elif request.method == 'POST':
         # Handle settings update (JSON or Form Multi-part for QR code upload)
         if request.content_type.startswith('multipart/form-data'):
@@ -1409,6 +1566,41 @@ def admin_settings(current_user):
                 set_setting(key, val)
 
         return jsonify({'message': 'Platform settings updated successfully.'})
+
+@app.route('/api/admin/feedbacks', methods=['GET'])
+@admin_required
+def admin_feedbacks(current_user):
+    feedbacks = UserFeedback.query.order_by(UserFeedback.created_at.desc()).all()
+    feedbacks_list = []
+    for f in feedbacks:
+        feedbacks_list.append({
+            'id': f.id,
+            'user_email': f.user.email,
+            'user_phone': f.user.phone,
+            'message': f.message,
+            'created_at': f.created_at.strftime('%Y-%m-%d %H:%M:%S')
+        })
+    return jsonify(feedbacks_list)
+
+@app.route('/api/admin/stakes', methods=['GET'])
+@admin_required
+def admin_stakes(current_user):
+    stakes = UserStake.query.order_by(UserStake.created_at.desc()).all()
+    stakes_list = []
+    for s in stakes:
+        stakes_list.append({
+            'id': s.id,
+            'user_email': s.user.email,
+            'user_phone': s.user.phone,
+            'amount': s.amount,
+            'duration_days': s.duration_days,
+            'interest_rate_pct': s.interest_rate_pct,
+            'total_expected_return': s.total_expected_return,
+            'status': s.status,
+            'created_at': s.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'expires_at': s.expires_at.strftime('%Y-%m-%d %H:%M:%S')
+        })
+    return jsonify(stakes_list)
 
 # ==========================================
 # SEED & RUN SETUP
@@ -1469,6 +1661,7 @@ def seed_database():
         set_setting('ref_commission_a', '10')
         set_setting('ref_commission_b', '2')
         set_setting('ref_commission_c', '0.5')
+        set_setting('staking_interest_rate', '1.5')
 
     # Migration: Delete old plans if migrating to the new system
     if InvestmentPlan.query.filter_by(price=1200).first() is not None:

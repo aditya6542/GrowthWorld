@@ -2,7 +2,7 @@ import pytest
 import datetime
 import jwt
 import app as app_module
-from app import app, db, User, InvestmentPlan, UserInvestment, UserTaskProgress, Transaction, PlatformSetting, hash_password
+from app import app, db, User, InvestmentPlan, UserInvestment, UserTaskProgress, Transaction, PlatformSetting, hash_password, UserFeedback, UserStake
 
 @pytest.fixture
 def client():
@@ -697,3 +697,192 @@ def test_referral_commission_settings(client):
         assert tx_a.amount == 75.0
 
 
+def test_feedback_submission(client):
+    # Register user
+    res = client.post('/api/auth/signup', json={
+        'email': 'feedback_user@test.com',
+        'phone': '8888888888',
+        'password': 'password123'
+    })
+    assert res.status_code == 201
+    token = res.get_json()['token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    # Post feedback - fail (empty)
+    res_fail = client.post('/api/feedback', json={'message': ''}, headers=headers)
+    assert res_fail.status_code == 400
+
+    # Post feedback - success
+    res_ok = client.post('/api/feedback', json={'message': 'Great platform, love it!'}, headers=headers)
+    assert res_ok.status_code == 200
+    assert 'Feedback submitted successfully' in res_ok.get_json()['message']
+
+    # Get feedback for user
+    res_get = client.get('/api/feedback', headers=headers)
+    assert res_get.status_code == 200
+    feedbacks = res_get.get_json()
+    assert len(feedbacks) == 1
+    assert feedbacks[0]['message'] == 'Great platform, love it!'
+
+    # Get feedbacks as admin
+    admin_headers = get_auth_headers(client, '9999999999', 'AdminPassword123')
+    res_admin = client.get('/api/admin/feedbacks', headers=admin_headers)
+    assert res_admin.status_code == 200
+    admin_feedbacks = res_admin.get_json()
+    # Check that our submitted feedback is in the list
+    user_feedback = [f for f in admin_feedbacks if f['user_email'] == 'feedback_user@test.com']
+    assert len(user_feedback) == 1
+    assert user_feedback[0]['message'] == 'Great platform, love it!'
+    assert user_feedback[0]['user_phone'] == '8888888888'
+
+
+def test_staking_fd_maturity(client):
+    # Register user
+    res = client.post('/api/auth/signup', json={
+        'email': 'stake_user@test.com',
+        'phone': '8888888889',
+        'password': 'password123'
+    })
+    assert res.status_code == 201
+    token = res.get_json()['token']
+    headers = {'Authorization': f'Bearer {token}'}
+    user_id = res.get_json()['user']['id']
+
+    # Set wallet balance to 5000
+    with app.app_context():
+        user = User.query.get(user_id)
+        user.wallet_balance = 5000.0
+        db.session.commit()
+
+    # 1. Test staking validation constraints
+    # Amount below 3500
+    res1 = client.post('/api/staking', json={'amount': 3000, 'duration_days': 45}, headers=headers)
+    assert res1.status_code == 400
+    assert 'Minimum staking amount' in res1.get_json()['message']
+
+    # Duration below 45
+    res2 = client.post('/api/staking', json={'amount': 3500, 'duration_days': 30}, headers=headers)
+    assert res2.status_code == 400
+    assert 'Minimum staking duration' in res2.get_json()['message']
+
+    # Amount greater than balance
+    res3 = client.post('/api/staking', json={'amount': 6000, 'duration_days': 45}, headers=headers)
+    assert res3.status_code == 400
+    assert 'Insufficient wallet balance' in res3.get_json()['message']
+
+    # 2. Test successful stake creation
+    res_ok = client.post('/api/staking', json={'amount': 4000, 'duration_days': 45}, headers=headers)
+    assert res_ok.status_code == 200
+    assert 'Staked' in res_ok.get_json()['message']
+    assert res_ok.get_json()['wallet_balance'] == 1000.0
+
+    # Verify active stake in DB and through API
+    with app.app_context():
+        stake = UserStake.query.filter_by(user_id=user_id).first()
+        assert stake is not None
+        assert stake.amount == 4000.0
+        assert stake.duration_days == 45
+        assert stake.status == 'active'
+        assert stake.interest_rate_pct == 1.5
+        # Expected return: 4000 * (1 + 0.015 * 45) = 4000 * 1.675 = 6700
+        assert stake.total_expected_return == 6700.0
+        
+        # Modify expires_at to be in the past to simulate maturity
+        stake.expires_at = datetime.datetime.utcnow() - datetime.timedelta(days=1)
+        db.session.commit()
+
+    # Get staking list - triggers process_lazy_payouts via @token_required
+    res_get = client.get('/api/staking', headers=headers)
+    assert res_get.status_code == 200
+    data = res_get.get_json()
+    assert data['wallet_balance'] == 7700.0  # 1000 + 6700
+    assert data['stakes'][0]['status'] == 'completed'
+
+    # Check transactions in DB
+    with app.app_context():
+        payout_tx = Transaction.query.filter_by(user_id=user_id, type='stake_payout').first()
+        assert payout_tx is not None
+        assert payout_tx.amount == 6700.0
+
+    # Check admin stakes endpoint
+    admin_headers = get_auth_headers(client, '9999999999', 'AdminPassword123')
+    res_admin = client.get('/api/admin/stakes', headers=admin_headers)
+    assert res_admin.status_code == 200
+    admin_stakes = res_admin.get_json()
+    user_stake_admin = [s for s in admin_stakes if s['user_email'] == 'stake_user@test.com']
+    assert len(user_stake_admin) == 1
+    assert user_stake_admin[0]['status'] == 'completed'
+    assert user_stake_admin[0]['amount'] == 4000.0
+
+
+def test_task_auto_renew_ist(client):
+    # Register user
+    res = client.post('/api/auth/signup', json={
+        'email': 'task_user@test.com',
+        'phone': '8888888890',
+        'password': 'password123'
+    })
+    assert res.status_code == 201
+    token = res.get_json()['token']
+    headers = {'Authorization': f'Bearer {token}'}
+    user_id = res.get_json()['user']['id']
+
+    # User needs an active investment plan to perform tasks.
+    # Get starter plan
+    plans = client.get('/api/plans').get_json()
+    plan_id = [p for p in plans if p['price'] == 1500][0]['id']
+
+    # Set user balance so they can buy
+    with app.app_context():
+        user = User.query.get(user_id)
+        user.wallet_balance = 2000.0
+        db.session.commit()
+
+    # Buy plan
+    res_buy = client.post('/api/plans/purchase', json={'plan_id': plan_id}, headers=headers)
+    assert res_buy.status_code == 200
+
+    # Try to claim reward without completing 5 tasks
+    res_claim_fail = client.post('/api/tasks/claim', headers=headers)
+    assert res_claim_fail.status_code == 400
+    assert 'complete all 5 tasks' in res_claim_fail.get_json()['message']
+
+    # Complete 5 tasks
+    for i in range(5):
+        res_comp = client.post('/api/tasks/complete', headers=headers)
+        assert res_comp.status_code == 200
+        assert res_comp.get_json()['completed_count'] == i + 1
+
+    # Trying to complete 6th task should fail
+    res_comp_fail = client.post('/api/tasks/complete', headers=headers)
+    assert res_comp_fail.status_code == 400
+    assert 'All 5 tasks for today are already completed' in res_comp_fail.get_json()['message']
+
+    # Claim reward
+    res_claim = client.post('/api/tasks/claim', headers=headers)
+    assert res_claim.status_code == 200
+    # Starter plan price=1500, daily_earning_min=90, daily_earning_max=105.
+    # Let's verify wallet balance has increased by daily reward (which will be between 90 and 105).
+    with app.app_context():
+        user = User.query.get(user_id)
+        # wallet_balance started at 2000, cost 1500 -> 500, now + reward
+        assert 590.0 <= user.wallet_balance <= 605.0
+
+    # Claim again should fail
+    res_claim_again = client.post('/api/tasks/claim', headers=headers)
+    assert res_claim_again.status_code == 400
+    assert 'already claimed' in res_claim_again.get_json()['message']
+
+    # Now simulate a day roll (auto renew at 00:00 IST)
+    # Update the date of the UserTaskProgress row to yesterday
+    with app.app_context():
+        progress_row = UserTaskProgress.query.filter_by(user_id=user_id).first()
+        assert progress_row is not None
+        yesterday_ist = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30) - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+        progress_row.date = yesterday_ist
+        db.session.commit()
+
+    # Complete a task again, should succeed because date has rolled over
+    res_new_day = client.post('/api/tasks/complete', headers=headers)
+    assert res_new_day.status_code == 200
+    assert res_new_day.get_json()['completed_count'] == 1
