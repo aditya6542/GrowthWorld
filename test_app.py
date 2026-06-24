@@ -787,16 +787,39 @@ def test_staking_fd_maturity(client):
         # Expected return: 4000 * (1 + 0.015 * 45) = 4000 * 1.675 = 6700
         assert stake.total_expected_return == 6700.0
         
+    # Get stake_id
+    with app.app_context():
+        stake = UserStake.query.filter_by(user_id=user_id).first()
+        stake_id = stake.id
+
+    # Try to claim stake before maturity - should fail with 400
+    res_claim_early = client.post('/api/staking/claim', json={'stake_id': stake_id}, headers=headers)
+    assert res_claim_early.status_code == 400
+    assert 'Staking lock is active' in res_claim_early.get_json()['message']
+
+    with app.app_context():
         # Modify expires_at to be in the past to simulate maturity
+        stake = UserStake.query.get(stake_id)
         stake.expires_at = datetime.datetime.utcnow() - datetime.timedelta(days=1)
         db.session.commit()
 
-    # Get staking list - triggers process_lazy_payouts via @token_required
+    # Get staking list - triggers process_lazy_payouts via @token_required but does NOT credit wallet automatically now
     res_get = client.get('/api/staking', headers=headers)
     assert res_get.status_code == 200
     data = res_get.get_json()
-    assert data['wallet_balance'] == 7700.0  # 1000 + 6700
-    assert data['stakes'][0]['status'] == 'completed'
+    assert data['wallet_balance'] == 1000.0  # Balance remains 1000.0 until manually withdrawn
+    assert data['stakes'][0]['status'] == 'active'
+    assert data['stakes'][0]['matured'] is True
+
+    # Claim stake manually - should succeed
+    res_claim = client.post('/api/staking/claim', json={'stake_id': stake_id}, headers=headers)
+    assert res_claim.status_code == 200
+    assert res_claim.get_json()['wallet_balance'] == 7700.0
+
+    # Try to claim again - should fail
+    res_claim_again = client.post('/api/staking/claim', json={'stake_id': stake_id}, headers=headers)
+    assert res_claim_again.status_code == 400
+    assert 'already been claimed or completed' in res_claim_again.get_json()['message']
 
     # Check transactions in DB
     with app.app_context():

@@ -241,9 +241,9 @@ def admin_required(f):
 
 def process_lazy_payouts(user):
     """
-    Checks user's active investments and active stakes.
-    For any investment/stake that has passed its expiration date,
-    updates status and credits staking returns back to wallet balance.
+    Checks user's active investments.
+    For any investment that has passed its expiration date,
+    updates status to expired.
     """
     now = datetime.datetime.utcnow()
     active_investments = UserInvestment.query.filter_by(user_id=user.id, status='active').all()
@@ -253,24 +253,6 @@ def process_lazy_payouts(user):
         if inv.expires_at <= now:
             inv.status = 'expired'
             db.session.add(inv)
-            updated = True
-
-    active_stakes = UserStake.query.filter_by(user_id=user.id, status='active').all()
-    for stake in active_stakes:
-        if stake.expires_at <= now:
-            stake.status = 'completed'
-            user.wallet_balance += stake.total_expected_return
-            
-            tx = Transaction(
-                user_id=user.id,
-                amount=stake.total_expected_return,
-                type='stake_payout',
-                status='approved',
-                description=f"FD Staking payout matured: Principal + Interest (₹{stake.total_expected_return:.2f})"
-            )
-            db.session.add(stake)
-            db.session.add(user)
-            db.session.add(tx)
             updated = True
                 
     if updated:
@@ -935,6 +917,7 @@ def user_staking(current_user):
     if request.method == 'GET':
         stakes = UserStake.query.filter_by(user_id=current_user.id).order_by(UserStake.created_at.desc()).all()
         stakes_list = []
+        now = datetime.datetime.utcnow()
         for s in stakes:
             stakes_list.append({
                 'id': s.id,
@@ -944,7 +927,8 @@ def user_staking(current_user):
                 'total_expected_return': s.total_expected_return,
                 'status': s.status,
                 'created_at': s.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                'expires_at': s.expires_at.strftime('%Y-%m-%d %H:%M:%S')
+                'expires_at': s.expires_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'matured': s.expires_at <= now
             })
             
         rate = float(get_setting('staking_interest_rate', '1.5'))
@@ -1021,6 +1005,48 @@ def user_staking(current_user):
             'message': f'Staked ₹{amount:.2f} successfully for {duration_days} days!',
             'wallet_balance': current_user.wallet_balance
         })
+
+@app.route('/api/staking/claim', methods=['POST'])
+@token_required
+def claim_staking_payout(current_user):
+    data = request.get_json() or {}
+    stake_id = data.get('stake_id')
+    if not stake_id:
+        return jsonify({'message': 'Staking ID is required.'}), 400
+        
+    stake = UserStake.query.filter_by(id=stake_id, user_id=current_user.id).first()
+    if not stake:
+        return jsonify({'message': 'Staking record not found.'}), 404
+        
+    if stake.status != 'active':
+        return jsonify({'message': 'This staking record has already been claimed or completed.'}), 400
+        
+    now = datetime.datetime.utcnow()
+    if stake.expires_at > now:
+        remaining = (stake.expires_at - now).days + 1
+        return jsonify({'message': f'Staking lock is active. Please wait {remaining} more days until maturity.'}), 400
+        
+    # Process payout
+    stake.status = 'completed'
+    current_user.wallet_balance += stake.total_expected_return
+    
+    tx = Transaction(
+        user_id=current_user.id,
+        amount=stake.total_expected_return,
+        type='stake_payout',
+        status='approved',
+        description=f"FD Staking withdrawal: Matured Principal + Interest (₹{stake.total_expected_return:.2f})"
+    )
+    
+    db.session.add(stake)
+    db.session.add(current_user)
+    db.session.add(tx)
+    db.session.commit()
+    
+    return jsonify({
+        'message': f'FD successfully withdrawn! ₹{stake.total_expected_return:.2f} has been added to your balance.',
+        'wallet_balance': current_user.wallet_balance
+    })
 
 # ==========================================
 # DEPOSITS SYSTEM API

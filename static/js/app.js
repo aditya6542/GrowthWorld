@@ -1702,16 +1702,25 @@ async function loadStakingData() {
         } else {
             stakes.forEach(s => {
                 const row = document.createElement('tr');
-                const statusBadge = s.status === 'active'
-                    ? '<span class="badge badge-success">Active</span>'
-                    : '<span class="badge badge-pending">Matured</span>';
+                let statusHtml = '';
+                if (s.status === 'completed') {
+                    statusHtml = '<span class="badge badge-pending">Withdrawn</span>';
+                } else if (s.status === 'active') {
+                    if (s.matured) {
+                        statusHtml = `<button class="btn btn-primary btn-small" onclick="handleClaimStake(${s.id}, ${s.total_expected_return})" style="padding: 4px 10px; font-size: 11px; border-radius: 8px;">Withdraw FD</button>`;
+                    } else {
+                        statusHtml = '<span class="badge badge-success">Locked</span>';
+                    }
+                } else {
+                    statusHtml = `<span class="badge badge-pending">${s.status}</span>`;
+                }
                 
                 row.innerHTML = `
                     <td>${s.created_at}</td>
                     <td style="font-weight:600;">₹${s.amount.toFixed(2)}</td>
                     <td>${s.duration_days} Days</td>
                     <td class="text-success" style="font-weight:700;">₹${s.total_expected_return.toFixed(2)}</td>
-                    <td>${statusBadge}</td>
+                    <td>${statusHtml}</td>
                 `;
                 tbody.appendChild(row);
             });
@@ -1761,6 +1770,18 @@ async function handleCreateStake(e) {
         document.getElementById('staking-form').reset();
         loadStakingData();
         fetchProfile(); // update wallet balance
+    }
+}
+
+async function handleClaimStake(stakeId, expectedReturn) {
+    const confirmClaim = confirm(`Are you sure you want to claim your matured FD and withdraw ₹${expectedReturn.toFixed(2)} back into your main wallet balance?`);
+    if (!confirmClaim) return;
+    
+    const res = await apiCall('/api/staking/claim', 'POST', { stake_id: stakeId });
+    if (res.success) {
+        showToast(res.data.message, 'success');
+        loadStakingData();
+        fetchProfile(); // refresh wallet balance in dashboard header
     }
 }
 
