@@ -287,16 +287,16 @@ def spa_fallback():
 @app.route('/api/auth/signup', methods=['POST'])
 def signup():
     data = request.get_json() or {}
-    phone = data.get('phone')
-    email = data.get('email')
+    phone = data.get('phone', '').strip()
+    email = data.get('email', '').strip().lower()
     password = data.get('password')
     ref_code = data.get('referral_code') # optional referral code
     
     # Banking Info (optional on signup, editable in settings)
-    upi_id = data.get('upi_id', '')
-    bank_name = data.get('bank_name', '')
-    account_number = data.get('account_number', '')
-    ifsc_code = data.get('ifsc_code', '')
+    upi_id = data.get('upi_id', '').strip()
+    bank_name = data.get('bank_name', '').strip()
+    account_number = data.get('account_number', '').strip()
+    ifsc_code = data.get('ifsc_code', '').strip()
 
     if not phone or not email or not password:
         return jsonify({'message': 'Phone, email, and password are required.'}), 400
@@ -359,13 +359,13 @@ def signup():
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.get_json() or {}
-    login_id = data.get('login_id') # Can be email or phone
+    login_id = data.get('login_id', '').strip() # Can be email or phone
     password = data.get('password')
 
     if not login_id or not password:
         return jsonify({'message': 'Email/Phone and password are required.'}), 400
 
-    user = User.query.filter((User.email == login_id) | (User.phone == login_id)).first()
+    user = User.query.filter((User.email == login_id.lower()) | (User.phone == login_id)).first()
 
     if not user or not check_password(password, user.password_hash):
         return jsonify({'message': 'Invalid credentials.'}), 401
