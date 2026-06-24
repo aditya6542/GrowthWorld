@@ -1172,6 +1172,9 @@ function switchAdminTab(tab) {
         case 'users':
             loadAdminUsers();
             break;
+        case 'transactions':
+            loadAdminTransactions();
+            break;
         case 'plans':
             loadAdminPlans();
             break;
@@ -1885,6 +1888,79 @@ async function loadAdminFeedbacks() {
                         <div class="text-muted text-small">${f.user_phone}</div>
                     </td>
                     <td style="text-align: left; word-break: break-word;">${f.message}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+    }
+}
+
+async function loadAdminTransactions() {
+    const res = await apiCall('/api/admin/transactions');
+    if (res.success) {
+        const tbody = document.getElementById('admin-transactions-tbody');
+        tbody.innerHTML = '';
+        
+        const txs = res.data || [];
+        if (txs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="no-data">No transactions found.</td></tr>';
+        } else {
+            txs.forEach(t => {
+                const row = document.createElement('tr');
+                
+                // Colorize the type
+                let typeHtml = '';
+                if (t.type === 'deposit') {
+                    typeHtml = '<span class="badge badge-success">Deposit</span>';
+                } else if (t.type === 'withdrawal') {
+                    typeHtml = '<span class="badge badge-danger" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2);">Withdrawal</span>';
+                } else if (t.type === 'referral_bonus') {
+                    typeHtml = '<span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2);">Referral</span>';
+                } else if (t.type === 'task_reward') {
+                    typeHtml = '<span class="badge" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.2);">Task Reward</span>';
+                } else if (t.type === 'plan_payout') {
+                    typeHtml = '<span class="badge" style="background: rgba(6, 182, 212, 0.15); color: #06b6d4; border: 1px solid rgba(6, 182, 212, 0.2);">Plan Earning</span>';
+                } else if (t.type === 'salary') {
+                    typeHtml = '<span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.2);">Salary</span>';
+                } else if (t.type === 'stake') {
+                    typeHtml = '<span class="badge" style="background: rgba(236, 72, 153, 0.15); color: #ec4899; border: 1px solid rgba(236, 72, 153, 0.2);">Staking FD</span>';
+                } else if (t.type === 'stake_payout') {
+                    typeHtml = '<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2);">FD Payout</span>';
+                } else {
+                    typeHtml = `<span class="badge badge-pending">${t.type}</span>`;
+                }
+
+                // Colorize the status
+                let statusHtml = '';
+                if (t.status === 'approved') {
+                    statusHtml = '<span class="badge badge-success">Approved</span>';
+                } else if (t.status === 'pending') {
+                    statusHtml = '<span class="badge badge-pending">Pending</span>';
+                } else if (t.status === 'rejected') {
+                    statusHtml = '<span class="badge badge-danger" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2);">Rejected</span>';
+                } else {
+                    statusHtml = `<span class="badge badge-pending">${t.status}</span>`;
+                }
+
+                // Format amount & fee
+                const amountText = `₹${t.amount.toFixed(2)}`;
+                const feeText = t.fee > 0 ? `₹${t.fee.toFixed(2)}` : '₹0.00';
+
+                row.innerHTML = `
+                    <td style="white-space: nowrap;">${t.created_at}</td>
+                    <td>
+                        <div style="font-weight:600;">${t.user_phone}</div>
+                        <div class="text-muted text-small">${t.user_email}</div>
+                    </td>
+                    <td>${typeHtml}</td>
+                    <td style="font-weight:600;">${amountText}</td>
+                    <td>${feeText}</td>
+                    <td>${statusHtml}</td>
+                    <td style="font-size:12px; text-align:left; word-break:break-word;">
+                        ${t.description || ''}
+                        ${t.utr_number ? `<br><span class="text-muted">UTR: ${t.utr_number}</span>` : ''}
+                        ${t.payment_method ? `<br><span class="text-muted">Method: ${t.payment_method}</span>` : ''}
+                    </td>
                 `;
                 tbody.appendChild(row);
             });

@@ -76,6 +76,9 @@ class User(db.Model):
 
     @property
     def is_active(self):
+        # Admin is always active
+        if self.is_admin:
+            return True
         # A user is active if they have at least one active investment
         now = datetime.datetime.utcnow()
         return self.investments.filter(
@@ -1634,6 +1637,27 @@ def admin_stakes(current_user):
             'expires_at': s.expires_at.strftime('%Y-%m-%d %H:%M:%S')
         })
     return jsonify(stakes_list)
+
+@app.route('/api/admin/transactions', methods=['GET'])
+@admin_required
+def admin_transactions(current_user):
+    txs = Transaction.query.order_by(Transaction.created_at.desc()).all()
+    txs_list = []
+    for t in txs:
+        txs_list.append({
+            'id': t.id,
+            'user_email': t.user.email,
+            'user_phone': t.user.phone,
+            'amount': t.amount,
+            'type': t.type,
+            'status': t.status,
+            'payment_method': t.payment_method,
+            'utr_number': t.utr_number,
+            'fee': t.fee,
+            'description': t.description,
+            'created_at': t.created_at.strftime('%Y-%m-%d %H:%M:%S')
+        })
+    return jsonify(txs_list)
 
 # ==========================================
 # SEED & RUN SETUP

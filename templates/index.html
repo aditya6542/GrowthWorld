@@ -916,6 +916,7 @@
                         <button id="admin-tab-deposits" class="admin-tab-btn active" onclick="switchAdminTab('deposits')">Pending Deposits (<span id="admin-pending-dep-count">0</span>)</button>
                         <button id="admin-tab-withdrawals" class="admin-tab-btn" onclick="switchAdminTab('withdrawals')">Pending Withdrawals (<span id="admin-pending-with-count">0</span>)</button>
                         <button id="admin-tab-users" class="admin-tab-btn" onclick="switchAdminTab('users')">Manage Users</button>
+                        <button id="admin-tab-transactions" class="admin-tab-btn" onclick="switchAdminTab('transactions')">All Transactions</button>
                         <button id="admin-tab-plans" class="admin-tab-btn" onclick="switchAdminTab('plans')">Configure Plans</button>
                         <button id="admin-tab-stakes" class="admin-tab-btn" onclick="switchAdminTab('stakes')">Staking / FDs</button>
                         <button id="admin-tab-feedbacks" class="admin-tab-btn" onclick="switchAdminTab('feedbacks')">User Feedbacks</button>
@@ -1187,6 +1188,31 @@
                                     </thead>
                                     <tbody id="admin-feedbacks-tbody">
                                         <tr><td colspan="3" class="no-data">No user feedbacks submitted.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 8. All Transactions Panel -->
+                    <div id="admin-panel-transactions" class="admin-panel-content hidden">
+                        <div class="table-card">
+                            <h3 class="mb-3">All Users Payment & Ledger History</h3>
+                            <div class="table-responsive">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Date</th>
+                                            <th>User Details</th>
+                                            <th>Type</th>
+                                            <th>Amount (₹)</th>
+                                            <th>Fee (₹)</th>
+                                            <th>Status</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-transactions-tbody">
+                                        <tr><td colspan="7" class="no-data">No transactions found.</td></tr>
                                     </tbody>
                                 </table>
                             </div>

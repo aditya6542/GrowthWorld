@@ -978,3 +978,48 @@ def test_staking_settings_update(client):
     # Stake successfully with ₹5000 for 60 days
     res_stake3 = client.post('/api/staking', json={'amount': 5000, 'duration_days': 60}, headers=headers)
     assert res_stake3.status_code == 200
+
+
+def test_admin_all_transactions_history(client):
+    # Log in as admin
+    admin_headers = get_auth_headers(client, '9999999999', 'AdminPassword123')
+
+    # Get initial transactions
+    res_get1 = client.get('/api/admin/transactions', headers=admin_headers)
+    assert res_get1.status_code == 200
+    initial_count = len(res_get1.get_json())
+
+    # Create a user and some transaction
+    res_user = client.post('/api/auth/signup', json={
+        'email': 'tx_user@test.com',
+        'phone': '8888888990',
+        'password': 'password123'
+    })
+    assert res_user.status_code == 201
+    token = res_user.get_json()['token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    # Request deposit
+    import io
+    data = {
+        'amount': '1500',
+        'payment_method': 'bank_upi',
+        'utr_number': '123456789012'
+    }
+    data['screenshot'] = (io.BytesIO(b"dummy image data"), "screenshot.png")
+    res_dep = client.post('/api/deposits', data=data, content_type='multipart/form-data', headers=headers)
+    assert res_dep.status_code == 201
+
+    # Fetch transactions list as admin
+    res_get2 = client.get('/api/admin/transactions', headers=admin_headers)
+    assert res_get2.status_code == 200
+    txs = res_get2.get_json()
+    assert len(txs) == initial_count + 1
+    
+    # Assert that our user's deposit is recorded correctly
+    user_txs = [t for t in txs if t['user_email'] == 'tx_user@test.com']
+    assert len(user_txs) == 1
+    assert user_txs[0]['amount'] == 1500.0
+    assert user_txs[0]['type'] == 'deposit'
+    assert user_txs[0]['status'] == 'pending'
+    assert user_txs[0]['utr_number'] == '123456789012'
